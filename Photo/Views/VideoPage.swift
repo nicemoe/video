@@ -514,7 +514,7 @@ struct VideoPage: View {
                 }
             }
         } label: {
-            Text(decoderPolicy == .auto ? "自动 · \(running.label)" : running.label)
+            Text(decoderPolicy.label)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(height: 38)

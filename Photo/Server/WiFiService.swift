@@ -150,7 +150,7 @@ final class WiFiService {
         case ("GET", "/"), ("GET", "/index.html"):
             return .html(WebUI.page)
 
-        case ("GET", "/favicon.ico"), ("GET", "/app-icon-white-v1.png"):
+        case ("GET", "/favicon.ico"), ("GET", "/app-icon-flat-v2.png"):
             guard let url = Bundle.main.url(forResource: "WebIcon", withExtension: "png") else {
                 return .error("网页图标资源缺失", status: 500)
             }
