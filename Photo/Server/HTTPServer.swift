@@ -33,8 +33,7 @@ final class HTTPServer: @unchecked Sendable {
     @discardableResult
     func start(preferredPorts: [UInt16] = [8080, 8081, 8088, 9000, 9090], handler: @escaping Handler) async throws -> UInt16 {
         try Task.checkCancellation()
-        stop()
-        let generation = lock.withLock { self.generation }
+        let generation = stop(ifCurrent: nil)
         var lastError: Error?
         for candidate in preferredPorts {
             do {
@@ -130,7 +129,7 @@ final class HTTPServer: @unchecked Sendable {
                     listener.start(queue: queue)
                 }
             } onCancel: {
-                self.stop(ifCurrent: generation)
+                _ = self.stop(ifCurrent: generation)
             }
             try Task.checkCancellation()
             guard isCurrent(generation) else { throw CancellationError() }
@@ -159,23 +158,24 @@ final class HTTPServer: @unchecked Sendable {
         }
     }
 
-    func stop() { stop(ifCurrent: nil) }
+    func stop() { _ = stop(ifCurrent: nil) }
 
-    private func stop(ifCurrent expected: UInt64?) {
+    private func stop(ifCurrent expected: UInt64?) -> UInt64 {
         // listener/port 也要纳入锁：start() 跑在并发执行器上，stop() 来自主线程，
         // 快速反复开关时两边会同时写这两个字段。
-        let resources: (NWListener?, [HTTPConnection])? = lock.withLock {
-            if let expected, expected != generation { return nil }
+        let resources: (UInt64, NWListener?, [HTTPConnection]) = lock.withLock {
+            if let expected, expected != generation { return (generation, nil, []) }
             generation &+= 1
-            let result = (listener, Array(connections.values))
+            let result = (generation, listener, Array(connections.values))
             listener = nil
             boundPort = 0
             connections.removeAll()
             return result
         }
-        guard let (old, all) = resources else { return }
+        let (generation, old, all) = resources
         old?.cancel()
         all.forEach { $0.close() }
+        return generation
     }
 
     /// 手上还有没有连着的客户端。
