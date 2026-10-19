@@ -74,5 +74,32 @@ def main():
         assert failed.returncode != 0 and 'Audio preroll survived fast seek' in failed.stderr
         print('PASS: regression test rejects unaligned fast-seek audio')
 
+        early_preview = source.replace('if loadingState.isFirst, !loadingState.isSeek {', 'if loadingState.isFirst {')
+        assert early_preview != source
+        path.write_text(early_preview)
+        subprocess.run(command, check=True)
+        failed = subprocess.run([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert failed.returncode != 0 and 'Resume consumed target video before aligned audio was ready' in failed.stderr
+        print('PASS: regression test rejects premature first-open seek preview')
+
+        page = (ROOT / 'Photo/Views/VideoPage.swift').read_text()
+        startup = (ROOT / 'Tools/Checks/ResumeStartupRegressionTests.swift').read_text()
+        startup = startup.replace('/* PRODUCTION_START */', block(page, 'private func start(from '))
+        startup = startup.replace('/* PRODUCTION_PAGE_SEEK */', block(page, 'private func seek(to '))
+        startup_path = Path(directory) / 'Startup.swift'
+        startup_binary = Path(directory) / 'startup'
+        startup_path.write_text(startup)
+        startup_command = [compiler, '-swift-version', '5', '-parse-as-library', str(startup_path), '-o', str(startup_binary)]
+        subprocess.run(startup_command, check=True)
+        subprocess.run([str(startup_binary)], check=True)
+        forced_precise = startup.replace('            seek(to: from)', '            made.seek(to: from, accurate: true)')
+        assert forced_precise != startup
+        startup_path.write_text(forced_precise)
+        subprocess.run(startup_command, check=True)
+        failed = subprocess.run([str(startup_binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert failed.returncode != 0 and 'Resume ignored the seek preference' in failed.stderr
+        print('PASS: regression test rejects forced accurate resume')
+
+
 if __name__ == '__main__':
     main()

@@ -254,7 +254,9 @@ extension KSMEPlayer: MEPlayerDelegate {
                 }
             }
         } else {
-            if loadingState.isFirst {
+            // A resumed first open is also a seek. Keep its first target frame
+            // queued until preroll alignment and both tracks are ready.
+            if loadingState.isFirst, !loadingState.isSeek {
                 if videoOutput?.pixelBuffer == nil {
                     videoOutput?.readNextFrame()
                 }

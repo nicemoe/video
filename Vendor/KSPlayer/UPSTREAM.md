@@ -15,3 +15,5 @@ Seek readiness: invalidate the previous playable state before seeking; ignore ca
 Seek diagnostics: bounded in-memory stage timings, queue/clock samples and display submission status for the last seek. Generation-tagged decoder callbacks cannot pollute a subsequent trace; this instrumentation does not change playback decisions.
 
 Fast seek alignment: discard decoded audio preroll before the first video frame, install the same boundary for incoming audio, and rebase both clocks before declaring playback ready. Compressed reference packets remain intact. The real build-12 ASF timestamp trace is covered by regression and mutation tests.
+
+First-open resume: skip the eager initial preview while a seek is pending; retain the first target frame until audio preroll alignment and target readiness. Production-method regression tests cover both first-open and in-session seeks, with mutation checks for the previous preview behavior.

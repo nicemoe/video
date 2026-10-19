@@ -712,7 +712,7 @@ struct VideoPage: View {
         let from = resumeAt ?? startAt
         if from > 0.5 {
             current = from
-            made.seek(to: from, accurate: true)
+            seek(to: from)
             // 只有「上次退出时存的位置」才提示。横竖屏转一下、切个解码器
             // 都不该弹这句，那两种人心里有数。
             if announceResume, resumeAt == nil {
@@ -801,7 +801,7 @@ struct VideoPage: View {
         isPlaying.toggle()
     }
 
-    /// 拖动只更新目标时间，松手按定位偏好提交一次跳转。
+    /// 恢复进度、重建播放器和手动跳转统一使用用户的定位偏好。
     private func seek(to seconds: Double) {
         engine?.seek(to: seconds, accurate: accurateSeek)
     }

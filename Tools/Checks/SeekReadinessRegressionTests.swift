@@ -253,66 +253,79 @@ final class TestPlayer {
             }
         }
         print("PASS: sample-accurate PCM trim, planar/interleaved stereo, 44.1/48 kHz and Float32/Int16")
-        let fast = TestPlayer()
-        let item = fast.playerItem
-        let video = TestTrack(.video)
-        let audio = TestTrack(.audio)
-        item.videoTrack = video
-        item.audioTrack = audio
-        item.videoAudioTracks = [video, audio]
-        fast.seek(time: 1088.853) { _ in fast.play() }
-        item.finishSeek()
-        for timestamp in [Int64(1085785), 1085819] {
-            video.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 34))
+        for firstOpen in [false, true] {
+            let fast = TestPlayer()
+            let item = fast.playerItem
+            item.isFirst = firstOpen
+            fast.videoOutput?.pixelBuffer = firstOpen ? nil : 1
+            let video = TestTrack(.video)
+            let audio = TestTrack(.audio)
+            item.videoTrack = video
+            item.audioTrack = audio
+            item.videoAudioTracks = [video, audio]
+            fast.seek(time: 1088.853) { _ in fast.play() }
+            item.finishSeek()
+            for timestamp in [Int64(1085785), 1085819] {
+                video.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 34))
+            }
+            // Audio queue fills with preroll first. It must be drained without
+            // starting the outputs; later decode uses the newly installed boundary.
+            for index in 0..<32 {
+                audio.outputRenderQueue.push(TestFrame(timestamp: 1083519 + Int64(index) * 22, duration: 22))
+            }
+            item.codecDidChangeCapacity()
+            expect(audio.frameCount == 0, "Audio preroll survived fast seek")
+            expect(fast.videoOutput!.previews == 0, "Resume consumed target video before aligned audio was ready")
+            expect(video.outputRenderQueue.count == 2, "Resume lost its first queued video frames")
+            expect(!fast.audioOutput.running && item.isSeek, "Audio resumed before aligned frames were ready")
+            expect(abs(audio.seekTime - 1085.785) < 0.000001, "Future audio preroll was not filtered")
+            // Keep only the samples at/after the video origin in the crossing block.
+            for timestamp in [Int64(1085775), 1085797, 1085819] {
+                audio.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 22))
+            }
+            events = []
+            item.codecDidChangeCapacity()
+            expect(events == ["video", "audio"], "Aligned output order changed")
+            expect(abs(audio.outputRenderQueue.first!.seconds - 1085.785) <= 1.0 / 48000, "Overlapping audio block was not trimmed")
+            expect(abs(item.audioClock.time.seconds - 1085.785) < 0.000001,
+                   "Audio clock kept the requested position instead of the actual keyframe")
+            expect(item.audioClock.time == item.videoClock.time, "Seek clocks have different origins")
+            let firstAudio = audio.outputRenderQueue.first!.seconds
+            expect(video.outputRenderQueue.first!.seconds - firstAudio < 0.022,
+                   "Phone trace would still wait seconds for audio")
+            // A second, backward seek selects its own origin, not the previous one.
+            video.outputRenderQueue.flush()
+            audio.outputRenderQueue.flush()
+            audio.seekTime = 0
+            fast.seek(time: 600.5) { _ in fast.play() }
+            item.finishSeek()
+            for timestamp in [Int64(599566), 599600] {
+                video.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 34))
+            }
+            for timestamp in [Int64(597300), 599560, 599582] {
+                audio.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 22))
+            }
+            item.codecDidChangeCapacity()
+            expect(abs(audio.outputRenderQueue.first!.seconds - 599.566) <= 1.0 / 48000, "Backward seek kept old preroll")
+            expect(abs(item.audioClock.time.seconds - 599.566) < 0.000001, "Backward seek kept old clock")
+            // Accurate seeks already filter against their requested target. Do not
+            // replace that target with a keyframe; audio-only playback has no video anchor.
+            fast.options.isAccurateSeek = true
+            fast.seek(time: 700) { _ in fast.play() }
+            item.finishSeek()
+            audio.seekTime = 700
+            let count = audio.frameCount
+            item.codecDidChangeCapacity()
+            expect(audio.seekTime == 700 && audio.frameCount == count, "Accurate seek was realigned")
         }
-        // Audio queue fills with preroll first. It must be drained without
-        // starting the outputs; later decode uses the newly installed boundary.
-        for index in 0..<32 {
-            audio.outputRenderQueue.push(TestFrame(timestamp: 1083519 + Int64(index) * 22, duration: 22))
-        }
-        item.codecDidChangeCapacity()
-        expect(audio.frameCount == 0, "Audio preroll survived fast seek")
-        expect(!fast.audioOutput.running && item.isSeek, "Audio resumed before aligned frames were ready")
-        expect(abs(audio.seekTime - 1085.785) < 0.000001, "Future audio preroll was not filtered")
-        // Keep only the samples at/after the video origin in the crossing block.
-        for timestamp in [Int64(1085775), 1085797, 1085819] {
-            audio.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 22))
-        }
-        events = []
-        item.codecDidChangeCapacity()
-        expect(events == ["video", "audio"], "Aligned output order changed")
-        expect(abs(audio.outputRenderQueue.first!.seconds - 1085.785) <= 1.0 / 48000, "Overlapping audio block was not trimmed")
-        expect(abs(item.audioClock.time.seconds - 1085.785) < 0.000001,
-               "Audio clock kept the requested position instead of the actual keyframe")
-        expect(item.audioClock.time == item.videoClock.time, "Seek clocks have different origins")
-        let firstAudio = audio.outputRenderQueue.first!.seconds
-        expect(video.outputRenderQueue.first!.seconds - firstAudio < 0.022,
-               "Phone trace would still wait seconds for audio")
-        // A second, backward seek selects its own origin, not the previous one.
-        video.outputRenderQueue.flush()
-        audio.outputRenderQueue.flush()
-        audio.seekTime = 0
-        fast.seek(time: 600.5) { _ in fast.play() }
-        item.finishSeek()
-        for timestamp in [Int64(599566), 599600] {
-            video.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 34))
-        }
-        for timestamp in [Int64(597300), 599560, 599582] {
-            audio.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 22))
-        }
-        item.codecDidChangeCapacity()
-        expect(abs(audio.outputRenderQueue.first!.seconds - 599.566) <= 1.0 / 48000, "Backward seek kept old preroll")
-        expect(abs(item.audioClock.time.seconds - 599.566) < 0.000001, "Backward seek kept old clock")
-        // Accurate seeks already filter against their requested target. Do not
-        // replace that target with a keyframe; audio-only playback has no video anchor.
-        fast.options.isAccurateSeek = true
-        fast.seek(time: 700) { _ in fast.play() }
-        item.finishSeek()
-        audio.seekTime = 700
-        let count = audio.frameCount
-        item.codecDidChangeCapacity()
-        expect(audio.seekTime == 700 && audio.frameCount == count, "Accurate seek was realigned")
         print("PASS: 100 seek readiness schedules, no audio before target video, paused preview, fractional timebase and audio-only playback")
-        print("PASS: build-12 ASF audio preroll trace, deferred readiness, crossing audio block, shared clocks and backward seek")
+        let normalOpen = TestPlayer()
+        normalOpen.loadState = .loading
+        normalOpen.playerItem.isFirst = true
+        normalOpen.videoOutput?.pixelBuffer = nil
+        normalOpen.playerItem.frames(audio: 0, video: 1)
+        normalOpen.playerItem.codecDidChangeCapacity()
+        expect(normalOpen.videoOutput!.previews == 1, "Ordinary first open lost its early preview")
+        print("PASS: ASF audio preroll alignment on both first-open resume and in-session seek, shared clocks and backward seek")
     }
 }
