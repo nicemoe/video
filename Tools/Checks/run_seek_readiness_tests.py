@@ -36,7 +36,7 @@ def main():
         'PLAYABLE': block(options, 'open func playable('),
         'CAPACITY_UPDATE': block(item, 'func codecDidChangeCapacity()'),
         'PREPARE_SEEK_OUTPUT': block(item, 'private func prepareSeekOutput()'),
-        'DISCARD_FRAMES': block((BASE / 'MEPlayer/MEPlayerItemTrack.swift').read_text(), 'func discardFrames(before:'),
+        'DISCARD_FRAMES': block((BASE / 'MEPlayer/MEPlayerItemTrack.swift').read_text(), 'func discardFrames(before '),
         'LOAD_STATE': block(player, 'public private(set) var loadState ='),
         'PLAYBACK_STATE': block(player, 'public private(set) var playbackState ='),
         'PLAY_OR_PAUSE': block(player, 'func playOrPause()'),
