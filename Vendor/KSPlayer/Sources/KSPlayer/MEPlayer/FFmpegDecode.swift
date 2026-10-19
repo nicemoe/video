@@ -34,7 +34,7 @@ class FFmpegDecode: DecodeProtocol {
         }
     }
 
-    func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
+    func decodeFrame(from packet: Packet, discardBefore: TimeInterval, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
         guard let codecContext, avcodec_send_packet(codecContext, packet.corePacket) == 0 else {
             return
         }
@@ -136,6 +136,21 @@ class FFmpegDecode: DecodeProtocol {
                 }
                 filter.filter(options: options, inputFrame: inputFrame) { avframe in
                     do {
+                        var duration = avframe.pointee.duration
+                        if duration == 0, avframe.pointee.sample_rate != 0, filter.timebase.num != 0 {
+                            duration = Int64(avframe.pointee.nb_samples) * Int64(filter.timebase.den) / (Int64(avframe.pointee.sample_rate) * Int64(filter.timebase.num))
+                        }
+                        var timestamp = avframe.pointee.best_effort_timestamp
+                        if timestamp < 0 { timestamp = avframe.pointee.pts }
+                        if timestamp < 0 { timestamp = avframe.pointee.pkt_dts }
+                        if timestamp < 0 { timestamp = bestEffortTimestamp }
+                        bestEffortTimestamp = timestamp &+ duration
+                        // Decode every reference packet and feed filters, but do not
+                        // allocate/copy pixels for video that accurate seek will discard.
+                        if packet.assetTrack.mediaType == .video, discardBefore > 0 {
+                            let end = timestamp + duration
+                            guard end > 0, filter.timebase.cmtime(for: end).seconds >= discardBefore else { return }
+                        }
                         var frame = try frameChange.change(avframe: avframe)
                         if let videoFrame = frame as? VideoVTBFrame, let pixelBuffer = videoFrame.corePixelBuffer {
                             if let pixelBuffer = pixelBuffer as? PixelBuffer {
@@ -149,22 +164,8 @@ class FFmpegDecode: DecodeProtocol {
                         //                frame.timebase = Timebase(avframe.pointee.time_base)
                         frame.size = packet.size
                         frame.position = packet.position
-                        frame.duration = avframe.pointee.duration
-                        if frame.duration == 0, avframe.pointee.sample_rate != 0, frame.timebase.num != 0 {
-                            frame.duration = Int64(avframe.pointee.nb_samples) * Int64(frame.timebase.den) / (Int64(avframe.pointee.sample_rate) * Int64(frame.timebase.num))
-                        }
-                        var timestamp = avframe.pointee.best_effort_timestamp
-                        if timestamp < 0 {
-                            timestamp = avframe.pointee.pts
-                        }
-                        if timestamp < 0 {
-                            timestamp = avframe.pointee.pkt_dts
-                        }
-                        if timestamp < 0 {
-                            timestamp = bestEffortTimestamp
-                        }
+                        frame.duration = duration
                         frame.timestamp = timestamp
-                        bestEffortTimestamp = timestamp &+ frame.duration
                         completionHandler(.success(frame))
                     } catch {
                         completionHandler(.failure(error))

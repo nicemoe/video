@@ -128,7 +128,7 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
         lastPacketBytes += packet.size
         let decoder = decoderMap.value(for: packet.assetTrack.trackID, default: makeDecode(assetTrack: packet.assetTrack))
 //        var startTime = CACurrentMediaTime()
-        decoder.decodeFrame(from: packet) { [weak self] result in
+        decoder.decodeFrame(from: packet, discardBefore: seekTime) { [weak self] result in
             guard let self else {
                 return
             }
@@ -300,7 +300,7 @@ public extension Dictionary {
 
 protocol DecodeProtocol {
     func decode()
-    func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void)
+    func decodeFrame(from packet: Packet, discardBefore: TimeInterval, completionHandler: @escaping (Result<MEFrame, Error>) -> Void)
     func doFlushCodec()
     func shutdown()
 }

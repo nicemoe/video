@@ -34,7 +34,7 @@ class SubtitleDecode: DecodeProtocol {
 
     func decode() {}
 
-    func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
+    func decodeFrame(from packet: Packet, discardBefore _: TimeInterval, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
         guard let codecContext else {
             return
         }

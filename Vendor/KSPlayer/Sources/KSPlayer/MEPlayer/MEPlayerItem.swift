@@ -475,8 +475,10 @@ extension MEPlayerItem {
                     }
                     timeStamp = position + increase
                 } else {
-                    increase *= Int64(AV_TIME_BASE)
-                    timeStamp = Int64(time.seconds) * Int64(AV_TIME_BASE) + increase
+                    // Convert the absolute target once. Rounding the current time
+                    // and delta separately can seek an entire extra GOP backwards.
+                    timeStamp = Int64((seekToTime + startTime.seconds) * Double(AV_TIME_BASE))
+                    increase = timeStamp - Int64(time.seconds * Double(AV_TIME_BASE))
                 }
                 let seekMin = increase > 0 ? timeStamp - increase + 2 : Int64.min
                 let seekMax = increase < 0 ? timeStamp - increase - 2 : Int64.max

@@ -27,7 +27,7 @@ class VideoToolboxDecode: DecodeProtocol {
         self.session = session
     }
 
-    func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
+    func decodeFrame(from packet: Packet, discardBefore _: TimeInterval, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
         if needReconfig {
             // 解决从后台切换到前台，解码失败的问题
             session = DecompressionSession(assetTrack: session.assetTrack, options: options)!

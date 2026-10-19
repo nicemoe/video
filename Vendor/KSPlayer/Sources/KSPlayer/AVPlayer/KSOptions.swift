@@ -24,6 +24,9 @@ open class KSOptions {
     public var isSecondOpen = KSOptions.isSecondOpen
     /// 开启精确seek
     public var isAccurateSeek = KSOptions.isAccurateSeek
+    /// Local sources can resume a seek once each active track has decoded frames.
+    /// The normal buffering policy remains in effect for playback and network sources.
+    public var isSeekReadyOnFrames = false
     /// Applies to short videos only
     public var isLoopPlay = KSOptions.isLoopPlay
     /// seek完是否自动播放
@@ -173,7 +176,7 @@ open class KSOptions {
             guard capacity.frameCount >= 2 else {
                 return false
             }
-            if capacity.isEndOfFile {
+            if capacity.isEndOfFile || (isSeek && isSeekReadyOnFrames) {
                 return true
             }
             if (syncDecodeVideo && capacity.mediaType == .video) || (syncDecodeAudio && capacity.mediaType == .audio) {

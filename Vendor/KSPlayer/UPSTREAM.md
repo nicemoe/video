@@ -7,3 +7,5 @@ Archive SHA-256: `5ba2325c6f221fff7d2e1afa75bf06126cf02438a6c63b1afabf967f0585a3
 Original Sources and LICENSE are retained. The package manifest uses the same FFmpegKit 6.1.4 version as the app and excludes upstream demo/test targets.
 
 Local changes: seek queue generations prevent an interrupted read from consuming the first packet of the new timeline; decoder flush occurs before decoding that packet. Old-generation decoded frames are rejected before entering the render queue.
+
+Seek latency changes: preserve fractional target times; skip preroll video pixel conversion after decoding/filtering; allow local seek readiness from decoded frames. Decoder packet/reference handling remains intact. See Docs/PlaybackSeeking.md for controlled media comparisons and device-validation limits.

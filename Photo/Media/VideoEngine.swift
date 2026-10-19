@@ -108,6 +108,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
         options.hardwareDecode = hardwareDecode
         options.asynchronousDecompression = false
         options.isAccurateSeek = true
+        options.isSeekReadyOnFrames = url.isFileURL
         // KSPlayer 默认添加 FAST；禁用非标准加速和首个关键帧之前的输出。
         options.decoderOptions["flags2"] = "-fast-showall"
         options.decoderOptions["flags"] = "-output_corrupt"
@@ -170,7 +171,6 @@ final class FFmpegEngine: NSObject, VideoEngine {
         guard ready, !stopped, !seeking, let target = pendingSeek else { return }
         pendingSeek = nil
         seeking = true
-        player.pause()
         // 清理旧时间线的显示队列，但保留最后一帧，避免快进时黑闪。
         player.videoOutput?.displayLayer.flush()
         options.seekFlags = AVSEEK_FLAG_BACKWARD
@@ -179,7 +179,6 @@ final class FFmpegEngine: NSObject, VideoEngine {
                 guard let self, !self.stopped else { return }
                 self.seeking = false
                 guard succeeded else { self.onFailure?("无法跳转到指定位置"); return }
-                self.player.videoOutput?.displayLayer.flush()
                 if self.pendingSeek != nil { self.performPendingSeek() }
                 else if self.wantsPlay { self.play() }
             }
