@@ -103,7 +103,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
 
     init(url: URL, hardwareDecode: Bool) {
         self.hardwareDecode = hardwareDecode
-        let options = KSOptions()
+        let options = ReferenceSafePlaybackOptions()
         self.options = options
         options.hardwareDecode = hardwareDecode
         options.asynchronousDecompression = false
