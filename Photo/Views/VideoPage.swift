@@ -161,24 +161,12 @@ struct VideoPage: View {
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
 
-    /// 这一次播放实际用的是哪个引擎。
-    ///
-    /// 起手按 asset.decoder 定：auto 就看封装（见下），手动选过就听人的。
-    /// 硬解中途报错会就地换成 .software 再来一遍。
+    /// 当前解码模式。失败直接显示，保留用户的选择。
     @State private var running: DecoderChoice = .auto
-    /// 软解也起不来才算真的放不了
     @State private var failed = false
+    @State private var failureMessage = ""
 
-    /// 这个文件起手该用哪个引擎。
-    ///
-    /// 原来的判据是「导入时探不出时长和尺寸」——那只兜得住 AVFoundation
-    /// 自己知道自己不行的那一半。花屏恰恰是另一半：AVI、WMV、RMVB 这些它
-    /// 解得开封装、报得出时长和尺寸，看着完全像能播，但里面的 DivX、Xvid、
-    /// WMV3、RV40 它不会解，就把解错的数据照样画出来，一片彩色马赛克。
-    /// 它不报错，所以那条判据永远轮不到它，全都走了硬解。
-    ///
-    /// 换成按封装分：不在 AVFoundation 那张短名单上的一律先软解。
-    /// 慢一点、费点电，但画面是对的——这个取舍没什么好犹豫的。
+    /// 自动模式保留现有的默认分配；手动选择始终优先。
     private var initialDecoder: DecoderChoice {
         switch asset.decoder {
         case .hardware: return .hardware
@@ -304,19 +292,23 @@ struct VideoPage: View {
     /// 点哪儿都退出，右上角再给一个看得见的关闭键。两条都要：手势是最快的，
     /// 但看不见；按钮慢一步，却是人第一眼会找的东西。
     private var unplayableNote: some View {
-        // 走到这儿说明硬解和软解都起不来了。
+        // 只报告当前模式的失败，不声称另一种解码器已经尝试过。
         // 直接留一块黑屏 + 一个按不动的播放键，只会让人以为是坏了。
         ZStack {
             VStack(spacing: 10) {
                 Image(systemName: "film")
                     .font(.system(size: 40))
-                Text("这个文件解不开")
+                Text("当前解码模式无法播放")
                     .font(.system(size: 14, weight: .semibold))
-                Text("硬解和软解都试过了。文件已保存，可以从「文件」App 里拷回电脑")
+                Text(failureMessage)
                     .font(.system(size: 12))
                     .multilineTextAlignment(.center)
                     .opacity(0.7)
-                Text("点一下退出")
+                Button(running == .hardware ? "切换为软解" : "切换为硬解") {
+                    switchTo(running == .hardware ? .software : .hardware, remember: true)
+                }
+                .buttonStyle(.bordered)
+                Button("返回", action: closeNow)
                     .font(.system(size: 12, weight: .semibold))
                     .opacity(0.55)
                     .padding(.top, 6)
@@ -325,9 +317,7 @@ struct VideoPage: View {
             .foregroundStyle(.white.opacity(0.75))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // 整块都能点，不只是那几行字
-        .contentShape(Rectangle())
-        .onTapGesture { closeNow() }
+
         .overlay(alignment: .topTrailing) {
             Button(action: closeNow) {
                 Image(systemName: "xmark")
@@ -677,9 +667,7 @@ struct VideoPage: View {
         let url = LibraryStore.fileURL(for: asset)
         let choice = running == .auto ? initialDecoder : running
         running = choice
-        var made: any VideoEngine = choice == .software
-            ? SoftwareEngine(url: url)
-            : AVEngine(url: url)
+        let made: any VideoEngine = FFmpegEngine(url: url, hardwareDecode: choice == .hardware)
 
         made.onProgress = { time in
             // 拖动过程中不要被回调顶回去
@@ -693,16 +681,12 @@ struct VideoPage: View {
         // 最后一帧的时间戳未必正好等于时长，会一直显示成暂停。
         // 播完按人挑的方式走：停下 / 单个循环 / 接着放下一个
         made.onFinish = { finish() }
-        made.onFailure = {
-            // 硬解起不来先换软解再试一次，别急着说放不了。
-            // 软解也起不来，才是真的解不开。
-            if choice == .hardware {
-                switchTo(.software, remember: false, announce: false)
-            } else {
-                failed = true
-                engine?.shutdown()
-                engine = nil
-            }
+        made.onFailure = { message in
+            failureMessage = message
+            failed = true
+            isPlaying = false
+            engine?.shutdown()
+            engine = nil
         }
 
         made.setRate(rate)
@@ -723,7 +707,7 @@ struct VideoPage: View {
             }
         }
 
-        // 页面重建或硬解回退可能发生在后台，此时不能重新启动播放。
+        // 页面重建或切换解码器可能发生在后台，此时不能重新启动播放。
         isPlaying = scenePhase == .active
         if isPlaying { made.play() }
     }
@@ -826,17 +810,10 @@ struct VideoPage: View {
 
     private func setLandscape(_ on: Bool) { ScreenOrientation.request(landscape: on) }
 
-    /// 换个解码器重来，从当前位置接着播。
-    ///
-    /// 为什么非要有这个手动开关：花屏时 AVFoundation 一切正常——status 是
-    /// readyToPlay，时长对、进度在走，只有画面是坏的。程序没有办法知道
-    /// 「画出来的东西不对」，只有眼睛知道。而封装名也只能猜个大概：被人强行
-    /// 转过壳的 mp4 里塞着 Xvid，扩展名写着 mp4，照样花。
-    ///
-    /// remember=true 时把选择记在这个文件上，下次点开直接用对的那个。
+    /// 手动切换解码器，保留当前位置和暂停状态。
     private func switchTo(_ choice: DecoderChoice, remember: Bool, announce: Bool = true) {
         let resumeAt = current
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || failed
         engine?.shutdown()
         engine = nil
         failed = false

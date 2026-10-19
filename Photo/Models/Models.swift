@@ -8,18 +8,13 @@ enum AssetKind: String, Codable, Hashable {
     case video
 }
 
-/// 这个文件用哪个解码器。
-///
-/// 有 auto 还要有手动的两档，是因为花屏这件事程序判断不了：AVFoundation
-/// 把一个它不会解的编码画成马赛克时，不报错、不失败，从代码里看和正常播放
-/// 一模一样。而封装名也只能猜个大概——被人强行转过壳的 mp4 里塞着 Xvid，
-/// 扩展名是 mp4，照样花。所以最后得留一个开关给眼睛用。
+/// 用户为当前文件选择的解码模式。硬解和软解使用独立的 KSOptions 实例。
 enum DecoderChoice: String, Codable, CaseIterable {
     /// 按封装猜。见 MediaFormats.prefersSoftware
     case auto
     /// 硬件解码，省电、seek 跟手
     case hardware
-    /// KSPlayer + FFmpeg，什么都能解，费电
+    /// FFmpeg 软件解码，明确关闭硬件解码
     case software
 
     var label: String {

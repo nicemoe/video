@@ -1,12 +1,9 @@
 import SwiftUI
 import AVFoundation
 import KSPlayer
+import VideoToolbox
 
-/// 播放引擎。
-///
-/// 有两套实现：能硬解的走 AVFoundation，硬件解码、省电、seek 跟手；
-/// AVFoundation 连解封装都做不到的（mkv、rmvb、wmv 这些）走 KSPlayer 的
-/// 软解。播放页的控件和手势只认这层接口，两边完全通用。
+/// 统一由 FFmpeg 解封装；硬件与软件解码通过实例配置明确选择。
 @MainActor
 protocol VideoEngine: AnyObject {
 
@@ -36,11 +33,8 @@ protocol VideoEngine: AnyObject {
     var onDuration: ((Double) -> Void)? { get set }
     /// 播完了
     var onFinish: (() -> Void)? { get set }
-    /// 起不来。
-    ///
-    /// 两个引擎都会报。硬解报了不代表这个文件放不了——上层会换软解再试一次，
-    /// 软解也报才是真的解不开。
-    var onFailure: (() -> Void)? { get set }
+    /// 播放失败。由界面显示错误，不自动切换解码器。
+    var onFailure: ((String) -> Void)? { get set }
 }
 
 // MARK: - 引擎的画面层
@@ -76,186 +70,28 @@ struct EngineView: UIViewRepresentable {
     }
 }
 
-// MARK: - 硬解：AVFoundation
-
-/// 承载 AVPlayerLayer 的裸视图。
-///
-/// 不用 AVKit 的 VideoPlayer：它自带一整套控制条，会把点击全吃掉，
-/// 工具栏没法跟着单击开合，缩放和快进手势也做不了。
-final class PlayerHostView: UIView {
-
-    /// 标准做法：AVPlayerLayer 就是这个视图的背衬层，尺寸自动跟着视图走。
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
-
-    private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-
-    var player: AVPlayer? {
-        get { playerLayer.player }
-        set { playerLayer.player = newValue }
-    }
-
-    var gravity: AVLayerVideoGravity {
-        get { playerLayer.videoGravity }
-        set { playerLayer.videoGravity = newValue }
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        playerLayer.videoGravity = .resizeAspect
-        backgroundColor = .clear
-        isUserInteractionEnabled = false
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
+// MARK: - KSPlayer / FFmpeg
 
 @MainActor
-final class AVEngine: VideoEngine {
-
-    private let player: AVPlayer
-    private let host = PlayerHostView()
-    private var timeObserver: Any?
-    private var endObserver: NSObjectProtocol?
-    private var statusObserver: NSKeyValueObservation?
-    private var rate: Float = 1
-
-    /// 拖动时的 seek 泵。
-    ///
-    /// 手指每移动一帧就发一次 seek 的话，AVPlayer 处理不过来会把中间那些丢掉
-    /// 或排队，画面卡在原处不动，直到松手才跳——看着就像「只有松手才生效」。
-    /// 同一时刻只让一个 seek 在飞，期间来的新位置只留最新那个。
-    private var seekInFlight = false
-    private var pendingSeek: Double?
-
-    var onProgress: ((Double) -> Void)?
-    var onDuration: ((Double) -> Void)?
-    var onFinish: (() -> Void)?
-    var onFailure: (() -> Void)?
-
-    var renderView: UIView { host }
-    var duration: Double {
-        let d = player.currentItem?.duration.seconds ?? 0
-        return d.isFinite ? d : 0
-    }
-    var currentTime: Double { player.currentTime().seconds }
-    var volume: Float {
-        get { player.volume }
-        set { player.volume = newValue }
-    }
-
-    init(url: URL) {
-        let item = AVPlayerItem(url: url)
-        player = AVPlayer(playerItem: item)
-        player.actionAtItemEnd = .pause
-        host.player = player
-
-        timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
-        ) { [weak self] time in
-            guard let self else { return }
-            MainActor.assumeIsolated {
-                self.onProgress?(time.seconds)
-                let d = self.duration
-                if d > 0 { self.onDuration?(d) }
-            }
-        }
-
-        // 播完要把按钮切回「播放」。光靠进度回调判断不可靠：
-        // 最后一帧的时间戳未必正好等于时长，会一直显示成暂停。
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.onFinish?() }
-        }
-
-        // 解不开就报上去，上层会换软解再试。
-        //
-        // 注意这只兜得住「AVFoundation 自己知道自己不行」的那一半：真正难办的
-        // 是它自以为行——把一个不会解的编码画成马赛克，status 一路 .readyToPlay，
-        // 从代码里看和正常播放毫无区别。那一半只能靠封装名先避开，
-        // 再不行就得人自己切一下。
-        statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            guard item.status == .failed else { return }
-            Task { @MainActor in self?.onFailure?() }
-        }
-    }
-
-    func play() {
-        player.play()
-        player.rate = rate
-    }
-
-    func pause() { player.pause() }
-
-    func setRate(_ value: Float) {
-        rate = value
-        player.defaultRate = value
-        if player.rate > 0 { player.rate = value }
-    }
-
-    func seek(to seconds: Double, precise: Bool) {
-        let target = max(0, seconds)
-        if precise {
-            pendingSeek = nil
-            seekInFlight = false
-            player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
-                        toleranceBefore: .zero, toleranceAfter: .zero)
-            return
-        }
-        guard !seekInFlight else {
-            pendingSeek = target
-            return
-        }
-        seekInFlight = true
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.seekInFlight = false
-                if let next = self.pendingSeek {
-                    self.pendingSeek = nil
-                    self.seek(to: next, precise: false)
-                }
-            }
-        }
-    }
-
-    func setFill(_ on: Bool) {
-        host.gravity = on ? .resizeAspectFill : .resizeAspect
-    }
-
-    func shutdown() {
-        if let timeObserver { player.removeTimeObserver(timeObserver) }
-        timeObserver = nil
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        endObserver = nil
-        player.pause()
-        host.player = nil
-        statusObserver?.invalidate()
-        statusObserver = nil
-    }
-}
-
-// MARK: - 软解：KSPlayer + FFmpeg
-
-/// AVFoundation 只认 mp4/mov 那一小撮封装，mkv、rmvb、wmv 这些它连解封装
-/// 都做不到。KSMEPlayer 自带一整套 FFmpeg，能解的范围大得多，代价是
-/// 纯软件解码——费电、发热，高码率 4K 会掉帧。所以只在确实解不了的时候
-/// 才切过来。
-@MainActor
-final class SoftwareEngine: NSObject, VideoEngine {
+final class FFmpegEngine: NSObject, VideoEngine {
 
     private let player: KSMEPlayer
+    private let hardwareDecode: Bool
+    private let options: KSOptions
     private let container = UIView()
     private var ticker: Timer?
     private var rate: Float = 1
     private var wantsPlay = false
     private var ready = false
     private var fill = false
+    private var stopped = false
+    private var seeking = false
+    private var pendingSeek: (time: Double, precise: Bool)?
 
     var onProgress: ((Double) -> Void)?
     var onDuration: ((Double) -> Void)?
     var onFinish: (() -> Void)?
-    var onFailure: (() -> Void)?
+    var onFailure: ((String) -> Void)?
 
     var renderView: UIView { container }
     var duration: Double { player.duration }
@@ -265,11 +101,16 @@ final class SoftwareEngine: NSObject, VideoEngine {
         set { player.playbackVolume = newValue }
     }
 
-    init(url: URL) {
-        // 不让它自己决定什么时候开播：我们有一整套自己的控件，
-        // 播放状态得由 VideoPage 说了算
-        KSOptions.isAutoPlay = false
-        player = KSMEPlayer(url: url, options: KSOptions())
+    init(url: URL, hardwareDecode: Bool) {
+        self.hardwareDecode = hardwareDecode
+        let options = KSOptions()
+        self.options = options
+        options.hardwareDecode = hardwareDecode
+        options.asynchronousDecompression = false
+        options.isAccurateSeek = true
+        options.isSeekedAutoPlay = false
+        options.registerRemoteControll = false
+        player = KSMEPlayer(url: url, options: options)
         super.init()
         container.backgroundColor = .clear
         container.isUserInteractionEnabled = false
@@ -280,7 +121,7 @@ final class SoftwareEngine: NSObject, VideoEngine {
         // 轮询一个内存里的数字，开销可以忽略。
         ticker = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.stopped else { return }
                 self.onProgress?(self.player.currentPlaybackTime)
                 let d = self.player.duration
                 if d > 0 { self.onDuration?(d) }
@@ -290,7 +131,7 @@ final class SoftwareEngine: NSObject, VideoEngine {
 
     /// 画面视图要等解码器把首帧准备好才有，建好之后再挂进容器
     private func attachRenderViewIfNeeded() {
-        guard let view = player.view, view.superview !== container else { return }
+        guard ready, !stopped, let view = player.view, view.superview !== container else { return }
         view.frame = container.bounds
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
@@ -299,7 +140,7 @@ final class SoftwareEngine: NSObject, VideoEngine {
 
     func play() {
         wantsPlay = true
-        guard ready else { return }
+        guard ready, !stopped, !seeking, pendingSeek == nil else { return }
         player.play()
         player.playbackRate = rate
     }
@@ -315,9 +156,26 @@ final class SoftwareEngine: NSObject, VideoEngine {
     }
 
     func seek(to seconds: Double, precise: Bool) {
-        // 软解没有「带容差」这档，统一按精确处理。
-        // 拖动时的合并交给 VideoPage 那边限流，这里只管落位。
-        player.seek(time: max(0, seconds)) { _ in }
+        guard seconds.isFinite, !stopped else { return }
+        pendingSeek = (max(0, seconds), precise)
+        performPendingSeek()
+    }
+
+    private func performPendingSeek() {
+        guard ready, !stopped, !seeking, let target = pendingSeek else { return }
+        pendingSeek = nil
+        seeking = true
+        player.pause()
+        options.isAccurateSeek = target.precise
+        player.seek(time: target.time) { [weak self] succeeded in
+            Task { @MainActor in
+                guard let self, !self.stopped else { return }
+                self.seeking = false
+                guard succeeded else { self.onFailure?("无法跳转到指定位置"); return }
+                if self.pendingSeek != nil { self.performPendingSeek() }
+                else if self.wantsPlay { self.play() }
+            }
+        }
     }
 
     func setFill(_ on: Bool) {
@@ -326,6 +184,15 @@ final class SoftwareEngine: NSObject, VideoEngine {
     }
 
     func shutdown() {
+        stopped = true
+        ready = false
+        wantsPlay = false
+        pendingSeek = nil
+        onProgress = nil
+        onDuration = nil
+        onFinish = nil
+        onFailure = nil
+        player.delegate = nil
         ticker?.invalidate()
         ticker = nil
         player.pause()
@@ -333,16 +200,26 @@ final class SoftwareEngine: NSObject, VideoEngine {
     }
 }
 
-extension SoftwareEngine: MediaPlayerDelegate {
+extension FFmpegEngine: MediaPlayerDelegate {
 
     func readyToPlay(player: some MediaPlayerProtocol) {
+        guard !stopped else { return }
+        if hardwareDecode {
+            guard let track = player.tracks(mediaType: .video).first(where: { $0.isEnabled }) as? FFmpegAssetTrack,
+                  let format = track.formatDescription else {
+                onFailure?("无法确认视频编码的硬解支持情况")
+                return
+            }
+            guard VTIsHardwareDecodeSupported(CMFormatDescriptionGetMediaSubType(format)) else {
+                onFailure?("此设备不支持 \(track.codecName) 硬解，请手动切换为软解")
+                return
+            }
+        }
         ready = true
         attachRenderViewIfNeeded()
         if duration > 0 { onDuration?(duration) }
-        if wantsPlay {
-            player.play()
-            self.player.playbackRate = rate
-        }
+        if pendingSeek != nil { performPendingSeek() }
+        else if wantsPlay { play() }
     }
 
     func changeLoadState(player: some MediaPlayerProtocol) {
@@ -354,12 +231,9 @@ extension SoftwareEngine: MediaPlayerDelegate {
     func playBack(player: some MediaPlayerProtocol, loopCount: Int) {}
 
     func finish(player: some MediaPlayerProtocol, error: Error?) {
-        // 从没就绪过就带着错误结束，说明连 FFmpeg 也解不了这个文件；
-        // 已经在放了才出错，当成正常播完处理，别把画面换成报错页
-        if error != nil, !ready {
-            onFailure?()
-        } else {
-            onFinish?()
-        }
+        guard !stopped else { return }
+        wantsPlay = false
+        if let error { onFailure?(error.localizedDescription) }
+        else { onFinish?() }
     }
 }

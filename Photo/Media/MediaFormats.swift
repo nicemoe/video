@@ -25,15 +25,7 @@ enum MediaFormats {
         videoExtensions.contains((fileName as NSString).pathExtension.lowercased())
     }
 
-    /// AVFoundation 靠得住的那几种封装。
-    ///
-    /// 「靠得住」和「打得开」是两回事，花屏的根子就在这儿：AVI、WMV、RMVB
-    /// 这些 AVFoundation 多半解得开封装、报得出时长和尺寸，看着完全像能播，
-    /// 但里面的视频编码（DivX、Xvid、WMV3、RV40）它并不会解，画面就是一片
-    /// 彩色马赛克——它不报错，只是把解错的数据照样画出来。
-    ///
-    /// 所以判据不能是「探不探得出时长」。凡是不在这张表上的封装，
-    /// 一律先上软解：慢一点、费点电，但至少画面是对的。
+    /// 自动模式的默认分配表。封装扩展名不代表具体编码的硬件兼容性。
     static let hardwareContainers: Set<String> = [
         "mp4", "m4v", "mov", "qt", "m4p", "3gp", "3g2"
     ]
