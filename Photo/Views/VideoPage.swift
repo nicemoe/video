@@ -526,12 +526,14 @@ struct VideoPage: View {
                 .disabled(engine == nil)
             }
         } label: {
-            Text(decoderPolicy.label)
-                .font(.system(size: 13, weight: .semibold))
+            Image(systemName: "cpu")
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(height: 38)
-                .padding(.horizontal, 4)
+                .frame(width: 38, height: 38)
+                .contentShape(Rectangle())
         }
+        .accessibilityLabel("解码选择")
+        .accessibilityValue(decoderPolicy.label)
     }
 
     /// 播完之后怎么办。点一下换下一种：停下 → 连续 → 单个循环 → 停下。
@@ -564,12 +566,14 @@ struct VideoPage: View {
                 }
             }
         } label: {
-            Text(rate == 1 ? "倍速" : "\(trimZero(Double(rate)))×")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(height: 38)
-                .padding(.horizontal, 4)
+            Image(systemName: "speedometer")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(rate == 1 ? .white : Theme.accent)
+                .frame(width: 38, height: 38)
+                .contentShape(Rectangle())
         }
+        .accessibilityLabel("倍速选择")
+        .accessibilityValue(rate == 1 ? "正常" : "\(trimZero(Double(rate)))倍")
     }
 
     /// 画质一行：1080P · 8.2 Mbps。码率是文件大小除以时长算的，够用了。
