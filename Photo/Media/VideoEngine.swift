@@ -147,7 +147,9 @@ final class FFmpegEngine: NSObject, VideoEngine {
 
     var renderView: UIView { container }
     var duration: Double { player.duration }
-    var currentTime: Double { player.currentPlaybackTime }
+    var currentTime: Double {
+        player.playbackState == .finished ? player.duration : player.currentPlaybackTime
+    }
     var volume: Float {
         get { player.playbackVolume }
         set { player.playbackVolume = newValue }
@@ -182,7 +184,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
             Task { @MainActor in
                 guard let self, !self.stopped else { return }
                 if !self.seeking, self.pendingSeek == nil {
-                    self.onProgress?(self.player.currentPlaybackTime)
+                    self.onProgress?(self.currentTime)
                 }
                 let d = self.player.duration
                 if d > 0 { self.onDuration?(d) }

@@ -29,7 +29,15 @@ def main():
         engine = (ROOT / 'Photo/Media/VideoEngine.swift').read_text()
         engine_test = """
 import Foundation
+enum State { case playing, seeking, finished }
+final class Player {
+    var playbackState = State.playing
+    var duration = 100.0
+    var currentPlaybackTime = 99.6
+}
 final class Engine {
+    let player = Player()
+    ENGINE_TIME
     var duration = 100.0
     var stopped = false
     var pendingSeek: (time: Double, accurate: Bool)?
@@ -39,6 +47,12 @@ final class Engine {
 @main struct EndSeekPolicy {
     static func main() {
         let engine = Engine()
+        precondition(engine.currentTime == 99.6)
+        engine.player.playbackState = .finished
+        precondition(engine.currentTime == 100, "Final frame timestamp moved finished progress backwards")
+        engine.player.playbackState = .seeking
+        engine.player.currentPlaybackTime = 40
+        precondition(engine.currentTime == 40, "Backward seek remained stuck at EOF")
         engine.seek(to: 40, accurate: false)
         precondition(engine.pendingSeek?.accurate == false)
         engine.seek(to: 100, accurate: false)
@@ -53,7 +67,7 @@ final class Engine {
         print("PASS: exact end uses terminal seek; ordinary fast seek remains unchanged")
     }
 }
-""".replace('ENGINE_SEEK', block(engine, '    func seek(to seconds:'))
+""".replace('ENGINE_SEEK', block(engine, '    func seek(to seconds: Double, accurate: Bool) {')).replace('ENGINE_TIME', block(engine, '    var currentTime: Double {'))
         engine_path = Path(folder) / 'Engine.swift'
         engine_binary = Path(folder) / 'engine'
         engine_path.write_text(engine_test)
