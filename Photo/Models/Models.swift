@@ -10,7 +10,7 @@ enum AssetKind: String, Codable, Hashable {
 
 /// 用户为当前文件选择的解码模式。硬解和软解使用独立的 KSOptions 实例。
 enum DecoderChoice: String, Codable, CaseIterable {
-    /// 按封装猜。见 MediaFormats.prefersSoftware
+    /// 默认优先硬解；不支持或失败时改用软解
     case auto
     /// 硬件解码，省电、seek 跟手
     case hardware

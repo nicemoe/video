@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import KSPlayer
 import VideoToolbox
+import Libavformat
 
 /// 统一由 FFmpeg 解封装；硬件与软件解码通过实例配置明确选择。
 @MainActor
@@ -18,9 +19,8 @@ protocol VideoEngine: AnyObject {
     func pause()
     func setRate(_ rate: Float)
 
-    /// precise=false：带容差，跳到最近的关键帧就行。
-    /// 拖动过程中每帧都做精确 seek 会明显卡顿。
-    func seek(to seconds: Double, precise: Bool)
+    /// 从前一个关键帧解码到目标位置；同一时刻只执行一个跳转。
+    func seek(to seconds: Double)
 
     /// 适应（留黑边）还是填充（裁掉溢出的部分）
     func setFill(_ on: Bool)
@@ -33,7 +33,7 @@ protocol VideoEngine: AnyObject {
     var onDuration: ((Double) -> Void)? { get set }
     /// 播完了
     var onFinish: (() -> Void)? { get set }
-    /// 播放失败。由界面显示错误，不自动切换解码器。
+    /// 播放失败。自动模式由播放页决定是否改用软件解码。
     var onFailure: ((String) -> Void)? { get set }
 }
 
@@ -86,7 +86,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
     private var fill = false
     private var stopped = false
     private var seeking = false
-    private var pendingSeek: (time: Double, precise: Bool)?
+    private var pendingSeek: Double?
 
     var onProgress: ((Double) -> Void)?
     var onDuration: ((Double) -> Void)?
@@ -108,6 +108,9 @@ final class FFmpegEngine: NSObject, VideoEngine {
         options.hardwareDecode = hardwareDecode
         options.asynchronousDecompression = false
         options.isAccurateSeek = true
+        // KSPlayer 默认添加 FAST；禁用非标准加速和首个关键帧之前的输出。
+        options.decoderOptions["flags2"] = "-fast-showall"
+        options.decoderOptions["flags"] = "-output_corrupt"
         options.isSeekedAutoPlay = false
         options.registerRemoteControll = false
         player = KSMEPlayer(url: url, options: options)
@@ -122,7 +125,9 @@ final class FFmpegEngine: NSObject, VideoEngine {
         ticker = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, !self.stopped else { return }
-                self.onProgress?(self.player.currentPlaybackTime)
+                if !self.seeking, self.pendingSeek == nil {
+                    self.onProgress?(self.player.currentPlaybackTime)
+                }
                 let d = self.player.duration
                 if d > 0 { self.onDuration?(d) }
             }
@@ -155,9 +160,9 @@ final class FFmpegEngine: NSObject, VideoEngine {
         player.playbackRate = value
     }
 
-    func seek(to seconds: Double, precise: Bool) {
+    func seek(to seconds: Double) {
         guard seconds.isFinite, !stopped else { return }
-        pendingSeek = (max(0, seconds), precise)
+        pendingSeek = max(0, seconds)
         performPendingSeek()
     }
 
@@ -166,12 +171,15 @@ final class FFmpegEngine: NSObject, VideoEngine {
         pendingSeek = nil
         seeking = true
         player.pause()
-        options.isAccurateSeek = target.precise
-        player.seek(time: target.time) { [weak self] succeeded in
+        // 清理旧时间线的显示队列，但保留最后一帧，避免快进时黑闪。
+        player.videoOutput?.displayLayer.flush()
+        options.seekFlags = AVSEEK_FLAG_BACKWARD
+        player.seek(time: target) { [weak self] succeeded in
             Task { @MainActor in
                 guard let self, !self.stopped else { return }
                 self.seeking = false
                 guard succeeded else { self.onFailure?("无法跳转到指定位置"); return }
+                self.player.videoOutput?.displayLayer.flush()
                 if self.pendingSeek != nil { self.performPendingSeek() }
                 else if self.wantsPlay { self.play() }
             }
@@ -211,7 +219,7 @@ extension FFmpegEngine: MediaPlayerDelegate {
                 return
             }
             guard VTIsHardwareDecodeSupported(CMFormatDescriptionGetMediaSubType(format)) else {
-                onFailure?("此设备不支持 \(track.codecName) 硬解，请手动切换为软解")
+                onFailure?("此设备不支持 \(track.codecName) 硬解")
                 return
             }
         }

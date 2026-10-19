@@ -223,7 +223,6 @@ struct PhotoViewer: View {
                       resumeTime = time
                       store.setPlayback(time, for: asset.id)
                   },
-                  onDecoderChange: { store.setDecoder($0, for: asset.id) },
                   onPlaybackChange: { videoPlaying = $0 },
                   mode: store.playbackMode,
                   onModeChange: { store.playbackMode = $0 })

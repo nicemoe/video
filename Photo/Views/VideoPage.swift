@@ -123,8 +123,6 @@ struct VideoPage: View {
     var announceResume = false
     /// 视图要走了，把当前进度交出去
     var onLeave: ((Double) -> Void)?
-    /// 人手动挑了解码器，记到这个文件上
-    var onDecoderChange: ((DecoderChoice) -> Void)?
     /// 在播 / 没在播。外面拿它决定要不要拦着屏幕自动锁。
     var onPlaybackChange: ((Bool) -> Void)?
     /// 播完之后怎么办：停下 / 单个循环 / 接着放下一个
@@ -161,21 +159,16 @@ struct VideoPage: View {
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
 
-    /// 当前解码模式。失败直接显示，保留用户的选择。
+    /// 每次打开默认自动选择；手动模式只用于本次播放。
+    @State private var decoderPolicy: DecoderChoice = .auto
     @State private var running: DecoderChoice = .auto
     @State private var failed = false
     @State private var failureMessage = ""
 
-    /// 自动模式保留现有的默认分配；手动选择始终优先。
+    /// 自动模式先检查实际编码的硬解支持情况，不按文件扩展名猜。
     private var initialDecoder: DecoderChoice {
-        switch asset.decoder {
-        case .hardware: return .hardware
-        case .software: return .software
-        case .auto:
-            return MediaFormats.prefersSoftware(fileName: asset.fileName) ? .software : .hardware
-        }
+        decoderPolicy == .software ? .software : .hardware
     }
-
 
     var body: some View {
         GeometryReader { geo in
@@ -511,16 +504,17 @@ struct VideoPage: View {
         }
     }
 
-    /// 切解码器。
-    ///
-    /// 摆在顶栏上而不是藏进设置里：花屏是当场看见的，人要的是当场换一下，
-    /// 而不是退出去翻菜单。按钮上直接写着现在用的是哪个，因为「现在是硬解」
-    /// 本身就是花屏时最需要看到的那条信息。
     private var decoderButton: some View {
-        Button {
-            switchTo(running == .software ? .hardware : .software, remember: true)
+        Menu {
+            ForEach(DecoderChoice.allCases, id: \.self) { choice in
+                Button {
+                    switchTo(choice, remember: true)
+                } label: {
+                    Label(choice.label, systemImage: decoderPolicy == choice ? "checkmark" : "")
+                }
+            }
         } label: {
-            Text(running == .software ? "软解" : "硬解")
+            Text(decoderPolicy == .auto ? "自动 · \(running.label)" : running.label)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(height: 38)
@@ -613,12 +607,11 @@ struct VideoPage: View {
                         if !scrubbing { engine?.pause() }   // 同上，拖之前先停
                         scrubbing = true
                         current = min(max(0, value.location.x / width), 1) * duration
-                        seek(to: current, precise: false)   // 拖的过程要快，容差交给系统
                     }
                     .onEnded { value in
                         guard duration > 0 else { return }
                         current = min(max(0, value.location.x / width), 1) * duration
-                        seek(to: current, precise: true)    // 松手落到准确位置
+                        seek(to: current)    // 松手落到准确位置
                         scrubbing = false
                         if isPlaying { engine?.play() }
                     }
@@ -682,6 +675,10 @@ struct VideoPage: View {
         // 播完按人挑的方式走：停下 / 单个循环 / 接着放下一个
         made.onFinish = { finish() }
         made.onFailure = { message in
+            if decoderPolicy == .auto, running == .hardware {
+                switchTo(.software, remember: false, announce: false)
+                return
+            }
             failureMessage = message
             failed = true
             isPlaying = false
@@ -699,7 +696,7 @@ struct VideoPage: View {
         let from = resumeAt ?? startAt
         if from > 0.5 {
             current = from
-            made.seek(to: from, precise: true)
+            made.seek(to: from)
             // 只有「上次退出时存的位置」才提示。横竖屏转一下、切个解码器
             // 都不该弹这句，那两种人心里有数。
             if announceResume, resumeAt == nil {
@@ -788,10 +785,9 @@ struct VideoPage: View {
         isPlaying.toggle()
     }
 
-    /// precise=false 时把容差交给引擎，跳到最近的关键帧就行——
-    /// 拖动过程中每帧都做精确 seek 会明显卡顿。
-    private func seek(to seconds: Double, precise: Bool = true) {
-        engine?.seek(to: seconds, precise: precise)
+    /// 拖动只更新目标时间，松手才提交一次精确跳转。
+    private func seek(to seconds: Double) {
+        engine?.seek(to: seconds)
     }
 
     private func setRate(_ value: Float) {
@@ -818,14 +814,14 @@ struct VideoPage: View {
         engine = nil
         failed = false
         running = choice
-        if remember { onDecoderChange?(choice) }
+        if remember { decoderPolicy = choice }
 
         start(from: resumeAt)
         if !wasPlaying {
             engine?.pause()
             isPlaying = false
         }
-        if announce { show(hint: choice == .software ? "已切到软解" : "已切到硬解") }
+        if announce { show(hint: "已切换为\(choice.label)") }
     }
 
     // MARK: 提示
@@ -930,7 +926,6 @@ struct VideoPage: View {
                 let span = min(duration, max(60, duration / 2))
                 let delta = Double(translation.width / size.width) * span
                 current = min(max(0, dragAnchor + delta), duration)
-                seek(to: current, precise: false)   // 带容差，要的是跟手
                 show(hint: "\(timeText(current)) / \(timeText(duration))")
             case .brightness:
                 let level = min(max(0, dragAnchor + Double(-translation.height / size.height)), 1)
@@ -946,7 +941,7 @@ struct VideoPage: View {
 
         case .ended, .cancelled, .failed:
             if dragMode == .seek {
-                seek(to: current, precise: true)   // 松手落到准确位置
+                seek(to: current)   // 松手落到准确位置
                 scrubbing = false
                 if isPlaying { engine?.play() }
             }
