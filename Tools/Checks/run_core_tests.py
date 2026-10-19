@@ -56,3 +56,6 @@ check_ffmpeg_log()
 
 from run_eof_tests import main as check_eof
 check_eof()
+
+from run_replay_button_tests import main as check_replay_button
+check_replay_button()

@@ -686,7 +686,7 @@ struct VideoPage: View {
             current = time
         }
         made.onDuration = { value in
-            if duration <= 0 { duration = value }
+            if value > 0 { duration = value }
         }
         // 播完要把按钮切回「播放」。光靠进度回调判断不可靠：
         // 最后一帧的时间戳未必正好等于时长，会一直显示成暂停。
@@ -794,13 +794,13 @@ struct VideoPage: View {
     private func toggle() {
         guard scenePhase == .active, let engine else { return }
         if isPlaying {
+            isPlaying = false
             engine.pause()
         } else {
-            // 播完了再按就从头来
-            if duration > 0, current >= duration - 0.15 { seek(to: 0) }
+            // 引擎依据完成状态决定重播；暂停在末尾附近仍从原位置继续。
+            isPlaying = true
             engine.play()
         }
-        isPlaying.toggle()
     }
 
     /// 恢复进度、重建播放器和手动跳转统一使用用户的定位偏好。

@@ -38,6 +38,7 @@ final class Player {
 }
 final class Engine {
     let player = Player()
+    var hasFinishedPlayback = false
     ENGINE_TIME
     var duration = 100.0
     var stopped = false
@@ -50,8 +51,10 @@ final class Engine {
         let engine = Engine()
         precondition(engine.currentTime == 99.6)
         engine.player.playbackState = .finished
+        engine.hasFinishedPlayback = true
         precondition(engine.currentTime == 100, "Final frame timestamp moved finished progress backwards")
         engine.player.playbackState = .seeking
+        engine.seek(to: 40, accurate: false)
         engine.player.currentPlaybackTime = 40
         precondition(engine.currentTime == 40, "Backward seek remained stuck at EOF")
         engine.seek(to: 40, accurate: false)

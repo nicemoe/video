@@ -94,6 +94,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
     private var ticker: Timer?
     private var rate: Float = 1
     private var wantsPlay = false
+    private var hasFinishedPlayback = false
     private var ready = false
     private var firstPlayableTime: CFTimeInterval?
     private var fill = false
@@ -148,7 +149,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
     var renderView: UIView { container }
     var duration: Double { player.duration }
     var currentTime: Double {
-        player.playbackState == .finished ? player.duration : player.currentPlaybackTime
+        hasFinishedPlayback ? player.duration : player.currentPlaybackTime
     }
     var volume: Float {
         get { player.playbackVolume }
@@ -204,6 +205,10 @@ final class FFmpegEngine: NSObject, VideoEngine {
     func play() {
         wantsPlay = true
         guard ready, !stopped, !seeking, pendingSeek == nil else { return }
+        if hasFinishedPlayback {
+            seek(to: 0, accurate: options.isAccurateSeek)
+            return
+        }
         player.play()
         player.playbackRate = rate
     }
@@ -220,6 +225,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
 
     func seek(to seconds: Double, accurate: Bool) {
         guard seconds.isFinite, !stopped else { return }
+        hasFinishedPlayback = false
         let target = duration > 0 ? min(max(0, seconds), duration) : max(0, seconds)
         // The end of the slider means EOF, not the preceding keyframe/GOP.
         pendingSeek = (target, accurate || (duration > 0 && target >= duration))
@@ -305,6 +311,9 @@ extension FFmpegEngine: MediaPlayerDelegate {
         guard !stopped else { return }
         wantsPlay = false
         if let error { onFailure?(error.localizedDescription) }
-        else { onFinish?() }
+        else {
+            hasFinishedPlayback = true
+            onFinish?()
+        }
     }
 }
