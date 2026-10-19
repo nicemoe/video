@@ -366,6 +366,18 @@ struct FolderDetailView: View {
                                 .fill(Color.black.opacity(selected ? 0.25 : 0))
                         }
                     }
+                    .overlay(alignment: .topTrailing) {
+                        if asset.isVideo {
+                            Text(verbatim: (asset.fileName as NSString).pathExtension.uppercased())
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 3)
+                                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
+                                .padding(6)
+                        }
+                    }
                     // 视频角标放左下，选择标记在右下，两边不打架
                     .overlay(alignment: .bottomLeading) {
                         if asset.isVideo {
