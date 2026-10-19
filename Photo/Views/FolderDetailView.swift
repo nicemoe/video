@@ -455,8 +455,7 @@ struct FolderDetailView: View {
         } preview: {
             AssetImage(asset: asset, maxPixel: 420)
                 .frame(width: layout.side, height: layout.side)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                .clipped()
         }
     }
 

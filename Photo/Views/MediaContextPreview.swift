@@ -19,7 +19,7 @@ struct CollageContextPreview: View {
     var body: some View {
         CoverCollage(assets: assets, side: side, tint: tint, emptyIcon: emptyIcon)
             .frame(width: side, height: side)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
-            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
+            // 画满系统预览容器，由系统统一裁圆角，避免两层圆角之间露出底色。
+            .clipped()
     }
 }
