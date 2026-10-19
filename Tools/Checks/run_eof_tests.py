@@ -26,6 +26,40 @@ def main():
         path.write_text(source)
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True, timeout=30)
+        engine = (ROOT / 'Photo/Media/VideoEngine.swift').read_text()
+        engine_test = """
+import Foundation
+final class Engine {
+    var duration = 100.0
+    var stopped = false
+    var pendingSeek: (time: Double, accurate: Bool)?
+    func performPendingSeek() {}
+    ENGINE_SEEK
+}
+@main struct EndSeekPolicy {
+    static func main() {
+        let engine = Engine()
+        engine.seek(to: 40, accurate: false)
+        precondition(engine.pendingSeek?.accurate == false)
+        engine.seek(to: 100, accurate: false)
+        precondition(engine.pendingSeek?.time == 100 && engine.pendingSeek?.accurate == true,
+                     "End seek replayed the preceding GOP")
+        engine.seek(to: 120, accurate: false)
+        precondition(engine.pendingSeek?.time == 100 && engine.pendingSeek?.accurate == true)
+        engine.seek(to: 40, accurate: true)
+        precondition(engine.pendingSeek?.accurate == true)
+        engine.seek(to: .nan, accurate: false)
+        precondition(engine.pendingSeek?.time == 40)
+        print("PASS: exact end uses terminal seek; ordinary fast seek remains unchanged")
+    }
+}
+""".replace('ENGINE_SEEK', block(engine, '    func seek(to seconds:'))
+        engine_path = Path(folder) / 'Engine.swift'
+        engine_binary = Path(folder) / 'engine'
+        engine_path.write_text(engine_test)
+        subprocess.run([shutil.which('swiftc'), '-swift-version', '5', '-parse-as-library',
+                        str(engine_path), '-o', str(engine_binary)], check=True)
+        subprocess.run([str(engine_binary)], check=True)
         broken = source.replace('if isEndOfFile { packetQueue.finish() }', '')
         assert broken != source
         path.write_text(broken)

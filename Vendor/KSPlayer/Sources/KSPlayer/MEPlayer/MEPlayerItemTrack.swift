@@ -275,14 +275,14 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
                 } else {
                     // Test flush BEFORE removing the item, including after a wait.
                     // Otherwise the first new keyframe is popped and then discarded.
-                    guard let packet = packetQueue.pop(wait: true, generation: generation, where: { [weak self] _, _ in
+                    guard let packet = packets.pop(wait: true, generation: generation, where: { [weak self] _, _ in
                         guard let self else { return false }
                         return self.state != .flush && self.state != .closed
                     }), state != .closed else { continue }
-                    guard packetQueue.generation == generation else { continue }
+                    guard packetQueue === packets, packets.generation == generation else { continue }
                     autoreleasepool {
                         doDecode(packet: packet, isCurrent: { [weak self] in
-                            self?.packetQueue.generation == generation
+                            self?.packetQueue === packets && packets.generation == generation
                         })
                     }
                 }
