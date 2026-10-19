@@ -309,7 +309,15 @@ struct FolderDetailView: View {
                         toastItem = Toast(icon: "square.and.arrow.down.fill",
                                           text: "已导入 \(saved) 张到「\(sub.name)」")
                     }
-                    .contextMenu { subfolderMenu(sub) }
+                    .contentShape(.contextMenuPreview, SquareCoverPreviewShape(cornerRadius: Theme.Radius.cover))
+                    .contextMenu {
+                        subfolderMenu(sub)
+                    } preview: {
+                        if let summary = summaries[sub.id] {
+                            CollageContextPreview(assets: summary.covers, side: folderLayout.side,
+                                                  tint: tint, emptyIcon: "folder")
+                        }
+                    }
                 }
             }
         }
@@ -435,6 +443,7 @@ struct FolderDetailView: View {
         }
         .buttonStyle(PressableCardStyle())
         .frame(maxHeight: .infinity, alignment: .top)
+        .contentShape(.contextMenuPreview, SquareCoverPreviewShape(cornerRadius: Theme.Radius.tile))
         .contextMenu {
             if !isSelecting {
                 Button(role: .destructive) {
@@ -443,6 +452,11 @@ struct FolderDetailView: View {
                     Label(asset.isVideo ? "删除视频" : "删除照片", systemImage: "trash")
                 }
             }
+        } preview: {
+            AssetImage(asset: asset, maxPixel: 420)
+                .frame(width: layout.side, height: layout.side)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
         }
     }
 

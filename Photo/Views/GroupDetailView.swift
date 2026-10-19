@@ -66,7 +66,15 @@ struct GroupDetailView: View {
                                     toastItem = Toast(icon: "square.and.arrow.down.fill",
                                                       text: "已导入 \(saved) 张到「\(folder.name)」")
                                 }
-                                .contextMenu { folderMenu(folder) }
+                                .contentShape(.contextMenuPreview, SquareCoverPreviewShape(cornerRadius: Theme.Radius.cover))
+                                .contextMenu {
+                                    folderMenu(folder)
+                                } preview: {
+                                    if let summary = summaries[folder.id] {
+                                        CollageContextPreview(assets: summary.covers, side: layout.side,
+                                                              tint: Theme.color(at: group.colorIndex), emptyIcon: "folder")
+                                    }
+                                }
                             }
                         }
                     }

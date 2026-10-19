@@ -25,7 +25,7 @@ struct ScrollingFileName: View {
     var body: some View {
         label
             .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .readingWidth($availableWidth)
             .opacity(isScrolling ? 0 : 1)
             .overlay(alignment: .leading) {

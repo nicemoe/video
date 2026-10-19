@@ -244,7 +244,7 @@ struct GroupCard: View {
                         .padding(6)
                 }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .center, spacing: 3) {
                 Text(group.name)
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(Theme.label)
@@ -255,7 +255,7 @@ struct GroupCard: View {
                     .foregroundStyle(Theme.secondaryLabel)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, 7)
         }
     }
@@ -310,7 +310,7 @@ struct FolderCard: View {
                         .padding(8)
                 }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .center, spacing: 3) {
                 Text(folder.name)
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(Theme.label)
@@ -321,7 +321,7 @@ struct FolderCard: View {
                     .foregroundStyle(Theme.secondaryLabel)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, 7)
         }
     }
