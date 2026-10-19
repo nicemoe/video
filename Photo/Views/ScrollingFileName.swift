@@ -51,7 +51,7 @@ struct ScrollingFileName: View {
                 }
             }
             .clipped()
-            .allowsHitTesting(false)
+            .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(verbatim: text))
             .onAppear { isVisible = true }
