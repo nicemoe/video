@@ -172,7 +172,7 @@ jobs:
         id: export
         run: |
           set -euo pipefail
-          # 用带引号的 heredoc：${{ }} 在 shell 之前就被 Actions 替换掉了，
+          # 用带引号的 heredoc：Actions 表达式在 shell 启动前已被替换，
           # 加引号只是防止证书名里万一有 $ 被 shell 再展开一次
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
