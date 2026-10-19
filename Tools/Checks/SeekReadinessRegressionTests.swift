@@ -150,11 +150,11 @@ final class TestPlayer {
     /* PRODUCTION_PLAY_OR_PAUSE */
     /* PRODUCTION_SEEK */
     /* PRODUCTION_LOADING_UPDATE */
-    init() {
+    init(initialLoadState: MediaLoadState = .playable) {
         playerItem.options = options
         playerItem.delegate = self
         playbackState = .playing
-        loadState = .playable
+        loadState = initialLoadState
     }
     func play() { playbackState = .playing }
     func pause() { playbackState = .paused }
@@ -319,8 +319,7 @@ final class TestPlayer {
             expect(audio.seekTime == 700 && audio.frameCount == count, "Accurate seek was realigned")
         }
         print("PASS: 100 seek readiness schedules, no audio before target video, paused preview, fractional timebase and audio-only playback")
-        let normalOpen = TestPlayer()
-        normalOpen.loadState = .loading
+        let normalOpen = TestPlayer(initialLoadState: .loading)
         normalOpen.playerItem.isFirst = true
         normalOpen.videoOutput?.pixelBuffer = nil
         normalOpen.playerItem.frames(audio: 0, video: 1)
