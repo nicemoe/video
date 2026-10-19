@@ -85,6 +85,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
     private var rate: Float = 1
     private var wantsPlay = false
     private var ready = false
+    private var firstPlayableTime: CFTimeInterval?
     private var fill = false
     private var stopped = false
     private var seeking = false
@@ -110,7 +111,27 @@ final class FFmpegEngine: NSObject, VideoEngine {
         return "多媒体播放诊断 version=\(version ?? "unknown") build=\(build ?? "unknown")\n"
             + "device=\(machine) os=\(UIDevice.current.systemVersion) codec=\(codec) hardwareRequested=\(hardwareDecode)\n"
             + "记录最近一次跳转的前 8 秒；video_submit 表示提交画面，不代表屏幕已完成显示。\n"
+            + startupDiagnosticReport + "\n"
             + options.seekDiagnostics.report()
+    }
+
+    private var startupDiagnosticReport: String {
+        let stages: [(String, Double)] = [
+            ("open", options.openTime), ("stream_info", options.findTime),
+            ("decoder_ready", options.readyTime), ("video_packet", options.readVideoTime),
+            ("video_decode_attempt", options.decodeVideoTime),
+            ("audio_decode_attempt", options.decodeAudioTime)
+        ]
+        let timings = stages.map { name, time in
+            time >= options.prepareTime && options.prepareTime > 0
+                ? "\(name)=\(String(format: "%.0f", (time - options.prepareTime) * 1000))ms"
+                : "\(name)=pending"
+        }
+        let playable = firstPlayableTime.map {
+            "playable=\(String(format: "%.0f", ($0 - options.prepareTime) * 1000))ms"
+        } ?? "playable=pending"
+        return "启动阶段（距 prepare；decode_attempt 是首次解码调用结束，非首帧显示）：\n"
+            + (timings + [playable, "localFrameStartup=\(options.isSecondOpen)"]).joined(separator: " ")
     }
 
     var renderView: UIView { container }
@@ -129,6 +150,9 @@ final class FFmpegEngine: NSObject, VideoEngine {
         options.asynchronousDecompression = false
         options.isAccurateSeek = true
         options.isSeekReadyOnFrames = url.isFileURL
+        // 本地文件首播等各轨道的解码帧就绪即可，不必先读够三秒的视频包。
+        // 后续缓冲与网络文件继续使用原有策略。
+        options.isSecondOpen = url.isFileURL
         // KSPlayer 默认添加 FAST；禁用非标准加速和首个关键帧之前的输出。
         options.decoderOptions["flags2"] = "-fast-showall"
         options.decoderOptions["flags"] = "-output_corrupt"
@@ -252,6 +276,9 @@ extension FFmpegEngine: MediaPlayerDelegate {
     }
 
     func changeLoadState(player: some MediaPlayerProtocol) {
+        if firstPlayableTime == nil, player.loadState == .playable {
+            firstPlayableTime = CACurrentMediaTime()
+        }
         attachRenderViewIfNeeded()
     }
 

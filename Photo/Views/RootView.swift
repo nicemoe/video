@@ -76,15 +76,13 @@ struct RootView: View {
                                     Button {
                                         path.append(.group(group.id))
                                     } label: {
-                                        GroupCard(group: group, side: layout.side)
+                                        GroupCard(group: group, side: layout.side) {
+                                            groupMenu(group)
+                                        }
                                     }
                                     .buttonStyle(PressableCardStyle())
-                                    .contentShape(.contextMenuPreview, SquareCoverPreviewShape(cornerRadius: Theme.Radius.cover))
-                                    .contextMenu {
+                                    .accessibilityActions {
                                         groupMenu(group)
-                                    } preview: {
-                                        CollageContextPreview(assets: group.coverAssets, side: layout.side,
-                                                              tint: Theme.color(at: group.colorIndex))
                                     }
                                 }
                             }

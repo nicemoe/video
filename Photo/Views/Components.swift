@@ -208,9 +208,10 @@ struct CoverCollage: View {
 
 // MARK: - 分组卡片
 
-struct GroupCard: View {
+struct GroupCard<MenuItems: View>: View {
     let group: PhotoGroup
     let side: CGFloat
+    @ViewBuilder var menu: MenuItems
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -243,6 +244,12 @@ struct GroupCard: View {
                         )
                         .padding(6)
                 }
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
+                .contextMenu {
+                    menu
+                } preview: {
+                    CollageContextPreview(assets: group.coverAssets, side: side, tint: Theme.color(at: group.colorIndex))
+                }
 
             VStack(alignment: .center, spacing: 3) {
                 Text(group.name)
@@ -263,7 +270,7 @@ struct GroupCard: View {
 
 // MARK: - 目录卡片
 
-struct FolderCard: View {
+struct FolderCard<MenuItems: View>: View {
 
     let folder: Folder
     /// 子目录数、含子目录的总张数、封面。由列表一次算好整组的再分发下来。
@@ -274,6 +281,7 @@ struct FolderCard: View {
     let summary: PhotoGroup.FolderSummary
     let side: CGFloat
     var tint: Color = Theme.accent
+    @ViewBuilder var menu: MenuItems
 
     private var subfolderCount: Int { summary.subfolders }
     private var totalPhotos: Int { summary.photos }
@@ -308,6 +316,12 @@ struct FolderCard: View {
                         .padding(6)
                         .background(.black.opacity(0.4), in: Circle())
                         .padding(8)
+                }
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
+                .contextMenu {
+                    menu
+                } preview: {
+                    CollageContextPreview(assets: summary.covers, side: side, tint: tint, emptyIcon: "folder")
                 }
 
             VStack(alignment: .center, spacing: 3) {

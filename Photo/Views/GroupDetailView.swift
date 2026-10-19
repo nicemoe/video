@@ -58,7 +58,9 @@ struct GroupDetailView: View {
                                     FolderCard(folder: folder,
                                                summary: summaries[folder.id] ?? .init(),
                                                side: layout.side,
-                                               tint: Theme.color(at: group.colorIndex))
+                                               tint: Theme.color(at: group.colorIndex)) {
+                                        folderMenu(folder)
+                                    }
                                 }
                                 .buttonStyle(PressableCardStyle())
                                 // 直接把图片拖到目录卡片上导入
@@ -66,14 +68,8 @@ struct GroupDetailView: View {
                                     toastItem = Toast(icon: "square.and.arrow.down.fill",
                                                       text: "已导入 \(saved) 张到「\(folder.name)」")
                                 }
-                                .contentShape(.contextMenuPreview, SquareCoverPreviewShape(cornerRadius: Theme.Radius.cover))
-                                .contextMenu {
+                                .accessibilityActions {
                                     folderMenu(folder)
-                                } preview: {
-                                    if let summary = summaries[folder.id] {
-                                        CollageContextPreview(assets: summary.covers, side: layout.side,
-                                                              tint: Theme.color(at: group.colorIndex), emptyIcon: "folder")
-                                    }
                                 }
                             }
                         }

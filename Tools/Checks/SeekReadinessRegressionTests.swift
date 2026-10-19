@@ -319,6 +319,31 @@ final class TestPlayer {
             expect(audio.seekTime == 700 && audio.frameCount == count, "Accurate seek was realigned")
         }
         print("PASS: 100 seek readiness schedules, no audio before target video, paused preview, fractional timebase and audio-only playback")
+        // High-bitrate local files should start with decoded audio/video,
+        // without requiring three seconds of compressed packets first.
+        let startupOptions = TestOptions()
+        let readyFrames: [CapacityProtocol] = [
+            Capacity(mediaType: .audio, frameCount: 2, packetCount: 0),
+            Capacity(mediaType: .video, frameCount: 2, packetCount: 0)
+        ]
+        expect(!startupOptions.playable(capacitys: readyFrames, isFirst: true, isSeek: false).isPlayable,
+               "Network startup buffering was bypassed")
+        startupOptions.isSecondOpen = true
+        expect(startupOptions.playable(capacitys: readyFrames, isFirst: true, isSeek: false).isPlayable,
+               "Local startup still waits for three seconds of packets")
+        expect(!startupOptions.playable(capacitys: readyFrames, isFirst: false, isSeek: false).isPlayable,
+               "Local startup policy changed ordinary rebuffering")
+        for missingTrack in [AVMediaType.audio, .video] {
+            for count in 0...1 {
+                let incomplete: [CapacityProtocol] = [
+                    Capacity(mediaType: .audio, frameCount: missingTrack == .audio ? count : 2, packetCount: 0),
+                    Capacity(mediaType: .video, frameCount: missingTrack == .video ? count : 2, packetCount: 0)
+                ]
+                expect(!startupOptions.playable(capacitys: incomplete, isFirst: true, isSeek: false).isPlayable,
+                       "Local startup began before both tracks were decoded")
+            }
+        }
+        print("PASS: local startup with decoded frames, waits for both tracks, network and rebuffer policies unchanged")
         let normalOpen = TestPlayer(initialLoadState: .loading)
         normalOpen.playerItem.isFirst = true
         normalOpen.videoOutput?.pixelBuffer = nil
