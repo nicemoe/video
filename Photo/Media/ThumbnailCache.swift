@@ -100,7 +100,7 @@ final class ThumbnailCache: @unchecked Sendable {
         if let hit = cached(asset, maxPixel: maxPixel) { return hit }
 
         await Self.decodeGate.enter()
-        var image = await decodeFromDisk(asset, maxPixel: maxPixel)
+        var image = decodeFromDisk(asset, maxPixel: maxPixel)
         await Self.decodeGate.leave()
 
         // 盘上还没有封面的视频，才需要真的去抽一帧
@@ -110,7 +110,7 @@ final class ThumbnailCache: @unchecked Sendable {
             await Self.posterGate.leave()
         }
 
-        guard let image else { return nil }
+        guard !Task.isCancelled, let image else { return nil }
         store(image, id: asset.id, maxPixel: maxPixel)
         return image
     }
@@ -209,9 +209,7 @@ final class ThumbnailCache: @unchecked Sendable {
         // 排队等的这会儿，别人可能已经抽好落盘了
         if let ready = posterOnDisk(for: asset, maxPixel: maxPixel) { return ready }
 
-        lock.lock()
-        let hopeless = hopelessPosters.contains(asset.id)
-        lock.unlock()
+        let hopeless = lock.withLock { hopelessPosters.contains(asset.id) }
         guard !hopeless else { return nil }
 
         let posterURL = LibraryStore.posterURL(for: asset.id)
@@ -219,13 +217,15 @@ final class ThumbnailCache: @unchecked Sendable {
         do {
             full = try await VideoProbe.poster(for: LibraryStore.fileURL(for: asset),
                                                maxPixel: Self.posterSide, decoder: asset.decoder)
+        } catch is CancellationError {
+            return nil
         } catch {
+            guard !Task.isCancelled else { return nil }
             Self.logger.error("视频封面生成失败：\(error.localizedDescription, privacy: .public)")
-            lock.lock()
-            hopelessPosters.insert(asset.id)
-            lock.unlock()
+            _ = lock.withLock { hopelessPosters.insert(asset.id) }
             return nil
         }
+        guard !Task.isCancelled else { return nil }
         guard let jpeg = full.jpegData(compressionQuality: 0.82) else { return full }
         try? jpeg.write(to: posterURL, options: .atomic)
 
@@ -330,9 +330,9 @@ final class ThumbnailCache: @unchecked Sendable {
         // 只能等缓存自己淘汰。登记之后，删这个文件时 invalidate 会顺手
         // 把它带走。挂在所有候选名下，谁没了都算数——包括那些没被用上的，
         // 它们本来就是「万一前面的坏了顶上来」的备选。
-        lock.lock()
-        for asset in assets { keysByAsset[asset.id, default: []].insert(key) }
-        lock.unlock()
+        lock.withLock {
+            for asset in assets { keysByAsset[asset.id, default: []].insert(key) }
+        }
         return made
     }
 

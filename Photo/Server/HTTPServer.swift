@@ -25,19 +25,24 @@ final class HTTPServer: @unchecked Sendable {
     private var connections: [ObjectIdentifier: HTTPConnection] = [:]
     private let lock = NSLock()
 
-    private(set) var port: UInt16 = 0
-    var onStateChange: (@Sendable (Bool) -> Void)?
+    private var generation: UInt64 = 0
+    private var boundPort: UInt16 = 0
+    var port: UInt16 { lock.withLock { boundPort } }
 
     /// 依次尝试若干端口，返回实际监听端口
     @discardableResult
     func start(preferredPorts: [UInt16] = [8080, 8081, 8088, 9000, 9090], handler: @escaping Handler) async throws -> UInt16 {
+        try Task.checkCancellation()
         stop()
-
+        let generation = lock.withLock { self.generation }
         var lastError: Error?
         for candidate in preferredPorts {
             do {
-                try await startListening(on: candidate, handler: handler)
+                guard isCurrent(generation) else { throw CancellationError() }
+                try await startListening(on: candidate, generation: generation, handler: handler)
                 return candidate
+            } catch is CancellationError {
+                throw CancellationError()
             } catch ServerError.timedOut {
                 // 超时不是端口问题（多半是本地网络权限），换端口也没用
                 throw ServerError.timedOut
@@ -49,7 +54,7 @@ final class HTTPServer: @unchecked Sendable {
         throw lastError ?? ServerError.noAvailablePort
     }
 
-    private func startListening(on port: UInt16, handler: @escaping Handler) async throws {
+    private func startListening(on port: UInt16, generation: UInt64, handler: @escaping Handler) async throws {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         params.includePeerToPeer = false
@@ -65,81 +70,112 @@ final class HTTPServer: @unchecked Sendable {
         // 广播 Bonjour，既方便发现，也能正确触发「本地网络」权限弹窗
         listener.service = NWListener.Service(name: UIDeviceName.current, type: "_http._tcp")
 
+        let listenerID = ObjectIdentifier(listener)
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
             let wrapper = HTTPConnection(connection: connection, queue: self.queue, handler: handler) { [weak self] id in
                 self?.remove(id)
             }
-            self.add(wrapper)
-            wrapper.start()
+            if self.add(wrapper, generation: generation, listenerID: listenerID) { wrapper.start() }
+            else { connection.cancel() }
         }
 
+        let installed = lock.withLock {
+            guard self.generation == generation else { return false }
+            self.listener = listener
+            return true
+        }
+        guard installed else { listener.cancel(); throw CancellationError() }
         let resumed = ResumeGuard()
 
         do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                // .waiting 不当作失败：首次开启时系统可能正在等用户回应「本地网络」授权，
-                // 用超时兜底，避免卡死。
-                let timeout = DispatchWorkItem {
-                    if resumed.claim() { continuation.resume(throwing: ServerError.timedOut) }
-                }
-                queue.asyncAfter(deadline: .now() + 4, execute: timeout)
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    // .waiting 不当作失败：首次开启时系统可能正在等用户回应「本地网络」授权，
+                    // 用超时兜底，避免卡死。
+                    let timeout = DispatchWorkItem {
+                        if resumed.claim() { continuation.resume(throwing: ServerError.timedOut) }
+                    }
+                    queue.asyncAfter(deadline: .now() + 4, execute: timeout)
 
-                listener.stateUpdateHandler = { [weak self] state in
-                    switch state {
-                    case .ready:
-                        self?.onStateChange?(true)
-                        if resumed.claim() { timeout.cancel(); continuation.resume() }
-                    case .failed(let error):
-                        if resumed.claim() {
-                            timeout.cancel()
-                            continuation.resume(throwing: ServerError.failed(error.localizedDescription))
-                        }
-                    case .waiting(let error):
-                        // 端口被占用时 NWListener 是停在 .waiting 而不是 .failed，
-                        // 必须在这里立刻失败，否则换端口重试的逻辑永远走不到。
-                        // 其他 waiting（比如在等「本地网络」授权）交给超时兜底。
-                        if case .posix(let code) = error, code == .EADDRINUSE || code == .EADDRNOTAVAIL {
+                    listener.stateUpdateHandler = { [weak self] state in
+                        switch state {
+                        case .ready:
+                            guard self?.markReady(port: port, generation: generation, listenerID: listenerID) == true else {
+                                if resumed.claim() { timeout.cancel(); continuation.resume(throwing: CancellationError()) }
+                                return
+                            }
+                            if resumed.claim() { timeout.cancel(); continuation.resume() }
+                        case .failed(let error):
                             if resumed.claim() {
                                 timeout.cancel()
                                 continuation.resume(throwing: ServerError.failed(error.localizedDescription))
                             }
+                        case .waiting(let error):
+                            // 端口被占用时 NWListener 是停在 .waiting 而不是 .failed，
+                            // 必须在这里立刻失败，否则换端口重试的逻辑永远走不到。
+                            // 其他 waiting（比如在等「本地网络」授权）交给超时兜底。
+                            if case .posix(let code) = error, code == .EADDRINUSE || code == .EADDRNOTAVAIL {
+                                if resumed.claim() {
+                                    timeout.cancel()
+                                    continuation.resume(throwing: ServerError.failed(error.localizedDescription))
+                                }
+                            }
+                        case .cancelled:
+                            if resumed.claim() { timeout.cancel(); continuation.resume(throwing: CancellationError()) }
+                        default:
+                            break
                         }
-                    case .cancelled:
-                        self?.onStateChange?(false)
-                        if resumed.claim() { timeout.cancel(); continuation.resume(throwing: ServerError.noAvailablePort) }
-                    default:
-                        break
                     }
+                    listener.start(queue: queue)
                 }
-                listener.start(queue: queue)
+            } onCancel: {
+                self.stop(ifCurrent: generation)
             }
+            try Task.checkCancellation()
+            guard isCurrent(generation) else { throw CancellationError() }
         } catch {
             listener.stateUpdateHandler = nil
             listener.cancel()
+            lock.withLock {
+                if self.generation == generation, self.listener === listener {
+                    self.listener = nil
+                    boundPort = 0
+                }
+            }
             throw error
         }
-
-        lock.lock()
-        self.listener = listener
-        self.port = port
-        lock.unlock()
     }
 
-    func stop() {
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        lock.withLock { self.generation == generation }
+    }
+
+    private func markReady(port: UInt16, generation: UInt64, listenerID: ObjectIdentifier) -> Bool {
+        lock.withLock {
+            guard self.generation == generation, let listener, ObjectIdentifier(listener) == listenerID else { return false }
+            boundPort = port
+            return true
+        }
+    }
+
+    func stop() { stop(ifCurrent: nil) }
+
+    private func stop(ifCurrent expected: UInt64?) {
         // listener/port 也要纳入锁：start() 跑在并发执行器上，stop() 来自主线程，
         // 快速反复开关时两边会同时写这两个字段。
-        lock.lock()
-        let old = listener
-        listener = nil
-        port = 0
-        let all = Array(connections.values)
-        connections.removeAll()
-        lock.unlock()
-
+        let resources: (NWListener?, [HTTPConnection])? = lock.withLock {
+            if let expected, expected != generation { return nil }
+            generation &+= 1
+            let result = (listener, Array(connections.values))
+            listener = nil
+            boundPort = 0
+            connections.removeAll()
+            return result
+        }
+        guard let (old, all) = resources else { return }
         old?.cancel()
         all.forEach { $0.close() }
-        onStateChange?(false)
     }
 
     /// 手上还有没有连着的客户端。
@@ -149,8 +185,12 @@ final class HTTPServer: @unchecked Sendable {
         return !connections.isEmpty
     }
 
-    private func add(_ c: HTTPConnection) {
-        lock.lock(); connections[ObjectIdentifier(c)] = c; lock.unlock()
+    private func add(_ c: HTTPConnection, generation: UInt64, listenerID: ObjectIdentifier) -> Bool {
+        lock.withLock {
+            guard self.generation == generation, let listener, ObjectIdentifier(listener) == listenerID else { return false }
+            connections[ObjectIdentifier(c)] = c
+            return true
+        }
     }
 
     private func remove(_ id: ObjectIdentifier) {

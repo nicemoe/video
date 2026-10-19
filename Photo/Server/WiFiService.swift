@@ -19,6 +19,8 @@ final class WiFiService {
     private(set) var lastEvent: String?
 
     private let server = HTTPServer()
+    private var startingTask: Task<UInt16, Error>?
+    private var startGeneration: UInt64 = 0
     /// 上一次有人来访的时间。空闲自动停服要用。
     private var lastActivity = Date()
     private var idleWatch: Task<Void, Never>?
@@ -43,7 +45,9 @@ final class WiFiService {
     // MARK: 开关
 
     func start() async {
-        guard !isRunning else { return }
+        guard !isRunning, status != .starting else { return }
+        startGeneration &+= 1
+        let generation = startGeneration
         status = .starting
         receivedCount = 0
         lastEvent = nil
@@ -53,11 +57,17 @@ final class WiFiService {
             return
         }
 
-        do {
-            let port = try await server.start { [weak self] request in
+        let task = Task { [server, weak self] in
+            try await server.start { [weak self] request in
                 guard let self else { return .notFound }
                 return await self.route(request)
             }
+        }
+        startingTask = task
+        defer { if generation == startGeneration { startingTask = nil } }
+        do {
+            let port = try await task.value
+            guard generation == startGeneration else { return }
             status = .running(url: "http://\(ip):\(port)")
             // 服务只能在前台活着——App 一被挂起 NWListener 就没了，所以传输
             // 期间必须拦着屏幕自动锁。代价是这段时间屏幕一直亮着，很费电，
@@ -66,11 +76,15 @@ final class WiFiService {
             lastActivity = Date()
             watchIdle()
         } catch {
+            guard generation == startGeneration else { return }
             status = .failed(error.localizedDescription)
         }
     }
 
     func stop() {
+        startGeneration &+= 1
+        startingTask?.cancel()
+        startingTask = nil
         idleWatch?.cancel()
         idleWatch = nil
         server.stop()
@@ -150,7 +164,7 @@ final class WiFiService {
         case ("GET", "/"), ("GET", "/index.html"):
             return .html(WebUI.page)
 
-        case ("GET", "/favicon.ico"), ("GET", "/app-icon-flat-v2.png"):
+        case ("GET", "/favicon.ico"), ("GET", "/app-icon-ragdoll-v1.png"):
             guard let url = Bundle.main.url(forResource: "WebIcon", withExtension: "png") else {
                 return .error("网页图标资源缺失", status: 500)
             }
