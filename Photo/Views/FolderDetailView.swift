@@ -152,7 +152,7 @@ struct FolderDetailView: View {
                             }
                             if folder?.assets.contains(where: { $0.isVideo }) == true {
                                 Toggle(isOn: $showVideoFileNames) {
-                                    Label("显示文件名", systemImage: "textformat")
+                                    Label("显示文件名", systemImage: "doc")
                                 }
                             }
                             if !children.isEmpty {
