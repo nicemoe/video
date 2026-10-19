@@ -122,6 +122,33 @@ public class CircularBuffer<Item: ObjectQueueItem> {
         }
     }
 
+    /// Inspect the next presentation item without consuming it.
+    public var first: Item? {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !destroyed, headIndex != tailIndex else { return nil }
+        return _buffer[Int(headIndex & mask)]
+    }
+
+    /// Change the admission boundary and remove queued preroll under the same lock.
+    /// Wake a producer blocked by a full queue when space becomes available.
+    @discardableResult
+    public func discardPrefix(while predicate: (Item) -> Bool, updating update: () -> Void) -> Int {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !destroyed else { return 0 }
+        update()
+        var removed = 0
+        while headIndex != tailIndex,
+              let item = _buffer[Int(headIndex & mask)], predicate(item) {
+            _buffer[Int(headIndex & mask)] = nil
+            headIndex &+= 1
+            removed += 1
+        }
+        if removed > 0 { condition.broadcast() }
+        return removed
+    }
+
     public func search(where predicate: (Item) -> Bool) -> [Item] {
         condition.lock()
         defer { condition.unlock() }

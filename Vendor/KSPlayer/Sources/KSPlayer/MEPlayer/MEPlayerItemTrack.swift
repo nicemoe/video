@@ -149,9 +149,13 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
                         guard isCurrent?() != false,
                               self.state != .flush, self.state != .closed else { return false }
                         if self.seekTime > 0 {
-                            let timestamp = frame.timestamp + frame.duration
-                            guard timestamp > 0,
-                                  frame.timebase.cmtime(for: timestamp).seconds >= self.seekTime else { return false }
+                            if let audioFrame = frame as? AudioFrame {
+                                guard audioFrame.trim(before: self.seekTime) else { return false }
+                            } else {
+                                let timestamp = frame.timestamp + frame.duration
+                                guard timestamp > 0,
+                                      frame.timebase.cmtime(for: timestamp).seconds >= self.seekTime else { return false }
+                            }
                             self.seekTime = 0
                         }
                         self.options.seekDiagnostics.mark("\(self.mediaType.rawValue)_queue_accept", token: diagnosticToken,
@@ -325,5 +329,15 @@ extension SyncPlayerItemTrack {
                 }
             }
         }
+    }
+}
+
+extension SyncPlayerItemTrack where Frame == AudioFrame {
+    func discardFrames(before time: TimeInterval) {
+        outputRenderQueue.discardPrefix(while: { !$0.trim(before: time) }, updating: {
+            // Future decoded preroll must use the same boundary as queued audio.
+            // Compressed packets still pass through the decoder normally.
+            self.seekTime = max(self.seekTime, time)
+        })
     }
 }

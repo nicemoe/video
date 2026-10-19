@@ -702,15 +702,33 @@ extension MEPlayerItem: MediaPlayback {
 }
 
 extension MEPlayerItem: CodecCapacityDelegate {
+    private func prepareSeekOutput() -> CMTime? {
+        guard isSeek, !options.isAccurateSeek,
+              let firstVideo = videoTrack?.outputRenderQueue.first else { return nil }
+        // ASF can return audio seconds before the first video keyframe. Fast seek
+        // resumes at that video frame, so audio preroll must not become playback.
+        audioTrack?.discardFrames(before: firstVideo.seconds)
+        return firstVideo.cmtime
+    }
+
     func codecDidChangeCapacity() {
         // The timer may fire while demux seek/queue flushing is still underway.
         // Such a sample belongs to neither the old nor the new ready timeline.
         guard state != .seeking else { return }
+        let seekStart = prepareSeekOutput()
         let loadingState = options.playable(capacitys: videoAudioTracks, isFirst: isFirst, isSeek: isSeek)
         options.seekDiagnostics.sample("buffers", token: options.seekDiagnostics.mediaToken,
             detail: "seek=\(isSeek) playable=\(loadingState.isPlayable) " + videoAudioTracks.map {
                 "\($0.mediaType.rawValue):frames=\($0.frameCount),packets=\($0.packetCount)"
             }.joined(separator: " "))
+        if loadingState.isPlayable, let seekStart {
+            // Seed both clocks with the actual fast-seek start before rendering
+            // or starting audio, rather than the later requested position.
+            audioClock.time = seekStart
+            videoClock.time = seekStart
+            options.seekDiagnostics.mark("seek_aligned", token: options.seekDiagnostics.mediaToken,
+                detail: "video=\(seekStart.seconds) audio=\(String(describing: audioTrack?.outputRenderQueue.first?.seconds))")
+        }
         delegate?.sourceDidChange(loadingState: loadingState)
         if loadingState.isPlayable {
             isFirst = false

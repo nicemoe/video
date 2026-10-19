@@ -17,6 +17,7 @@ open class TestOptions {
     let seekDiagnostics = SeekDiagnostics()
     var preferredForwardBufferDuration = 3.0
     var maxBufferDuration = 30.0
+    var isAccurateSeek = false
     var isSeekReadyOnFrames = true
     var syncDecodeVideo = false
     var syncDecodeAudio = false
@@ -34,6 +35,37 @@ struct Capacity: CapacityProtocol {
     var frameMaxCount: Int = 8
     var isEndOfFile = false
 }
+
+/* PRODUCTION_AUDIO_MODEL */
+extension AVAudioFormat {
+    var sampleSize: UInt32 { streamDescription.pointee.mBytesPerFrame }
+}
+typealias TestFrame = AudioFrame
+extension AudioFrame {
+    convenience init(timestamp: Int64, duration: Int64) {
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000,
+                                   channels: 2, interleaved: false)!
+        self.init(dataSize: Int(duration) * 48 * 4, audioFormat: format)
+        self.timestamp = timestamp
+        self.duration = duration
+        timebase = Timebase(num: 1, den: 1000)
+        numberOfSamples = UInt32(duration * 48)
+        for buffer in data { buffer?.initialize(repeating: 0, count: dataSize) }
+    }
+}
+final class TestTrack: CapacityProtocol {
+    let outputRenderQueue = CircularBuffer<TestFrame>()
+    var seekTime = 0.0
+    var mediaType: AVMediaType
+    var frameCount: Int { outputRenderQueue.count }
+    var packetCount = 100
+    var fps: Float = 48
+    var frameMaxCount = 32
+    var isEndOfFile = false
+    init(_ mediaType: AVMediaType) { self.mediaType = mediaType }
+    /* PRODUCTION_DISCARD_FRAMES */
+}
+struct TestClock { var time = CMTime.zero }
 
 final class AudioDevice {
     var running = false
@@ -74,6 +106,11 @@ final class TestItem {
     var target = 0.0
     var completion: ((Bool) -> Void)?
     var videoAudioTracks: [CapacityProtocol] = []
+    var videoTrack: TestTrack?
+    var audioTrack: TestTrack?
+    var audioClock = TestClock()
+    var videoClock = TestClock()
+    /* PRODUCTION_PREPARE_SEEK_OUTPUT */
     func seek(time: TimeInterval, completion: @escaping (Bool) -> Void) {
         target = time
         state = .seeking
@@ -174,6 +211,108 @@ final class TestPlayer {
         audioOnly.playerItem.videoAudioTracks = [Capacity(mediaType: .audio, frameCount: 2)]
         audioOnly.playerItem.codecDidChangeCapacity()
         expect(audioOnly.audioOutput.running, "Audio-only seek incorrectly waited for video")
+        // Replay the build-12 phone trace: video is ready at 1085.785, but ASF
+        // delivers audio from 1083.519. That audio previously froze video ~2.25s.
+        // WMA decoded blocks can span hundreds of milliseconds. Exercise actual
+        // production PCM buffers: both channel layouts, formats and sample rates.
+        for rate in [44100.0, 48000.0] {
+            for interleaved in [false, true] {
+                for commonFormat in [AVAudioCommonFormat.pcmFormatFloat32, .pcmFormatInt16] {
+                    let format = AVAudioFormat(commonFormat: commonFormat, sampleRate: rate,
+                                               channels: 2, interleaved: interleaved)!
+                    let samples = Int(rate * 0.371)
+                    let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+                    let frame = AudioFrame(dataSize: samples * bytesPerFrame, audioFormat: format)
+                    frame.numberOfSamples = UInt32(samples)
+                    frame.timebase = Timebase(num: 1, den: 1000)
+                    frame.timestamp = 1085587
+                    frame.duration = 371
+                    var originals: [[UInt8]] = []
+                    for (channel, pointer) in frame.data.enumerated() {
+                        let bytes = (0..<frame.dataSize).map { UInt8(($0 + channel * 13) % 251) }
+                        bytes.withUnsafeBufferPointer { pointer!.initialize(from: $0.baseAddress!, count: bytes.count) }
+                        originals.append(bytes)
+                    }
+                    let originalStart = CMTimeConvertScale(frame.cmtime, timescale: Int32(rate), method: .roundHalfAwayFromZero).value
+                    expect(frame.trim(before: 1085.785), "Crossing PCM block was discarded")
+                    let removed = Int(frame.timestamp - originalStart)
+                    expect(frame.seconds >= 1085.785 && frame.seconds - 1085.785 < 1 / rate,
+                           "PCM did not begin at the video origin within one sample")
+                    expect(Int(frame.numberOfSamples) == samples - removed, "PCM sample count was not trimmed")
+                    expect(frame.dataSize == (samples - removed) * bytesPerFrame, "PCM byte size was not trimmed")
+                    expect(frame.duration == Int64(frame.numberOfSamples), "PCM duration lost sample precision")
+                    for (channel, pointer) in frame.data.enumerated() {
+                        let actual = Array(UnsafeBufferPointer(start: pointer!, count: frame.dataSize))
+                        expect(actual == Array(originals[channel][(removed * bytesPerFrame)...]),
+                               "PCM channel data was corrupted by overlapping copy")
+                    }
+                    let remaining = frame.numberOfSamples
+                    expect(frame.trim(before: 1085.785) && frame.numberOfSamples == remaining, "PCM trim was not idempotent")
+                    expect(!frame.trim(before: 1086), "Wholly pre-origin PCM was retained")
+                }
+            }
+        }
+        print("PASS: sample-accurate PCM trim, planar/interleaved stereo, 44.1/48 kHz and Float32/Int16")
+        let fast = TestPlayer()
+        let item = fast.playerItem
+        let video = TestTrack(.video)
+        let audio = TestTrack(.audio)
+        item.videoTrack = video
+        item.audioTrack = audio
+        item.videoAudioTracks = [video, audio]
+        fast.seek(time: 1088.853) { _ in fast.play() }
+        item.finishSeek()
+        for timestamp in [Int64(1085785), 1085819] {
+            video.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 34))
+        }
+        // Audio queue fills with preroll first. It must be drained without
+        // starting the outputs; later decode uses the newly installed boundary.
+        for index in 0..<32 {
+            audio.outputRenderQueue.push(TestFrame(timestamp: 1083519 + Int64(index) * 22, duration: 22))
+        }
+        item.codecDidChangeCapacity()
+        expect(audio.frameCount == 0, "Audio preroll survived fast seek")
+        expect(!fast.audioOutput.running && item.isSeek, "Audio resumed before aligned frames were ready")
+        expect(abs(audio.seekTime - 1085.785) < 0.000001, "Future audio preroll was not filtered")
+        // Keep only the samples at/after the video origin in the crossing block.
+        for timestamp in [Int64(1085775), 1085797, 1085819] {
+            audio.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 22))
+        }
+        events = []
+        item.codecDidChangeCapacity()
+        expect(events == ["video", "audio"], "Aligned output order changed")
+        expect(abs(audio.outputRenderQueue.first!.seconds - 1085.785) <= 1.0 / 48000, "Overlapping audio block was not trimmed")
+        expect(abs(item.audioClock.time.seconds - 1085.785) < 0.000001,
+               "Audio clock kept the requested position instead of the actual keyframe")
+        expect(item.audioClock.time == item.videoClock.time, "Seek clocks have different origins")
+        let firstAudio = audio.outputRenderQueue.first!.seconds
+        expect(video.outputRenderQueue.first!.seconds - firstAudio < 0.022,
+               "Phone trace would still wait seconds for audio")
+        // A second, backward seek selects its own origin, not the previous one.
+        video.outputRenderQueue.flush()
+        audio.outputRenderQueue.flush()
+        audio.seekTime = 0
+        fast.seek(time: 600.5) { _ in fast.play() }
+        item.finishSeek()
+        for timestamp in [Int64(599566), 599600] {
+            video.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 34))
+        }
+        for timestamp in [Int64(597300), 599560, 599582] {
+            audio.outputRenderQueue.push(TestFrame(timestamp: timestamp, duration: 22))
+        }
+        item.codecDidChangeCapacity()
+        expect(abs(audio.outputRenderQueue.first!.seconds - 599.566) <= 1.0 / 48000, "Backward seek kept old preroll")
+        expect(abs(item.audioClock.time.seconds - 599.566) < 0.000001, "Backward seek kept old clock")
+        // Accurate seeks already filter against their requested target. Do not
+        // replace that target with a keyframe; audio-only playback has no video anchor.
+        fast.options.isAccurateSeek = true
+        fast.seek(time: 700) { _ in fast.play() }
+        item.finishSeek()
+        audio.seekTime = 700
+        let count = audio.frameCount
+        item.codecDidChangeCapacity()
+        expect(audio.seekTime == 700 && audio.frameCount == count, "Accurate seek was realigned")
         print("PASS: 100 seek readiness schedules, no audio before target video, paused preview, fractional timebase and audio-only playback")
+        print("PASS: build-12 ASF audio preroll trace, deferred readiness, crossing audio block, shared clocks and backward seek")
     }
 }

@@ -242,7 +242,7 @@ final class SubtitleFrame: MEFrame {
 }
 
 public final class AudioFrame: MEFrame {
-    public let dataSize: Int
+    public private(set) var dataSize: Int
     public let audioFormat: AVAudioFormat
     public internal(set) var timebase = Timebase.defaultValue
     public var timestamp: Int64 = 0
@@ -292,6 +292,30 @@ public final class AudioFrame: MEFrame {
             data[i]?.deallocate()
         }
         data.removeAll()
+    }
+
+    /// Remove decoded audio before a seek origin, including a partial block.
+    /// Returns false when this block contains no samples at or after the origin.
+    func trim(before time: TimeInterval) -> Bool {
+        let rate = Int32(audioFormat.sampleRate)
+        let start = CMTimeConvertScale(cmtime, timescale: rate, method: .roundHalfAwayFromZero).value
+        let target = CMTimeConvertScale(CMTime(seconds: time, preferredTimescale: 1_000_000_000),
+            timescale: rate, method: .roundTowardPositiveInfinity).value
+        let removed = target - start
+        guard removed > 0 else { return numberOfSamples > 0 }
+        guard removed < Int64(numberOfSamples) else { return false }
+        let bytesPerFrame = Int(audioFormat.streamDescription.pointee.mBytesPerFrame)
+        let offset = Int(removed) * bytesPerFrame
+        numberOfSamples -= UInt32(removed)
+        dataSize = Int(numberOfSamples) * bytesPerFrame
+        for buffer in data {
+            if let buffer { memmove(buffer, buffer.advanced(by: offset), dataSize) }
+        }
+        // Preserve sample precision for the audio output's clock interpolation.
+        timebase = Timebase(num: 1, den: rate)
+        timestamp = start + removed
+        duration = Int64(numberOfSamples)
+        return true
     }
 
     public func toFloat() -> [ContiguousArray<Float>] {

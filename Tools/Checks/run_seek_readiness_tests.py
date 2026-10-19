@@ -26,11 +26,17 @@ def main():
     item = (BASE / 'MEPlayer/MEPlayerItem.swift').read_text()
     options = (BASE / 'AVPlayer/KSOptions.swift').read_text()
     definitions = (BASE / 'AVPlayer/PlayerDefines.swift').read_text()
+    model = (BASE / 'MEPlayer/Model.swift').read_text()
     parts = {
+        'AUDIO_MODEL': '\n'.join(block(model, signature) for signature in [
+            'public protocol ObjectQueueItem', 'extension ObjectQueueItem', 'protocol MEFrame',
+            'public struct Timebase', 'public final class AudioFrame']),
         'CAPACITY_TYPES': '\n'.join(block(definitions, signature) for signature in
             ['public protocol CapacityProtocol', 'extension CapacityProtocol', 'public struct LoadingState']),
         'PLAYABLE': block(options, 'open func playable('),
         'CAPACITY_UPDATE': block(item, 'func codecDidChangeCapacity()'),
+        'PREPARE_SEEK_OUTPUT': block(item, 'private func prepareSeekOutput()'),
+        'DISCARD_FRAMES': block((BASE / 'MEPlayer/MEPlayerItemTrack.swift').read_text(), 'func discardFrames(before:'),
         'LOAD_STATE': block(player, 'public private(set) var loadState ='),
         'PLAYBACK_STATE': block(player, 'public private(set) var playbackState ='),
         'PLAY_OR_PAUSE': block(player, 'func playOrPause()'),
@@ -48,7 +54,7 @@ def main():
         path = Path(directory) / 'Readiness.swift'
         binary = Path(directory) / 'readiness'
         path.write_text(source)
-        command = [compiler, '-swift-version', '5', '-parse-as-library', str(path), str(BASE / 'MEPlayer/SeekDiagnostics.swift'), '-o', str(binary)]
+        command = [compiler, '-swift-version', '5', '-parse-as-library', str(path), str(BASE / 'MEPlayer/SeekDiagnostics.swift'), str(BASE / 'MEPlayer/CircularBuffer.swift'), '-o', str(binary)]
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True)
         # Remove only the new seek invalidation. The same test must reject it.
@@ -59,6 +65,14 @@ def main():
         failed = subprocess.run([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         assert failed.returncode != 0 and 'Seek reused old playable state' in failed.stderr
         print('PASS: regression test rejects the previous seek implementation')
+        # The real phone trace must fail if audio preroll alignment is removed.
+        unaligned = source.replace('audioTrack?.discardFrames(before: firstVideo.seconds)', '')
+        assert unaligned != source
+        path.write_text(unaligned)
+        subprocess.run(command, check=True)
+        failed = subprocess.run([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert failed.returncode != 0 and 'Audio preroll survived fast seek' in failed.stderr
+        print('PASS: regression test rejects unaligned fast-seek audio')
 
 if __name__ == '__main__':
     main()
