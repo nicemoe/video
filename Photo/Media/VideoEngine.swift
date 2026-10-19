@@ -5,6 +5,16 @@ import VideoToolbox
 import Libavformat
 import Darwin
 
+/// Add PLAYBACK_DIAGNOSTICS to the app's Swift compilation conditions only
+/// when collecting a diagnostic build. Normal builds expose no diagnostic UI.
+enum PlaybackDiagnostics {
+    #if PLAYBACK_DIAGNOSTICS
+    static let isEnabled = true
+    #else
+    static let isEnabled = false
+    #endif
+}
+
 /// 统一由 FFmpeg 解封装；硬件与软件解码通过实例配置明确选择。
 @MainActor
 protocol VideoEngine: AnyObject {
@@ -97,6 +107,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
     var onFailure: ((String) -> Void)?
 
     var diagnosticReport: String {
+        guard PlaybackDiagnostics.isEnabled else { return "" }
         var system = utsname()
         uname(&system)
         let machineSize = MemoryLayout.size(ofValue: system.machine)
@@ -144,7 +155,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
 
     init(url: URL, hardwareDecode: Bool) {
         self.hardwareDecode = hardwareDecode
-        let options = ReferenceSafePlaybackOptions()
+        let options = ReferenceSafePlaybackOptions(enableSeekDiagnostics: PlaybackDiagnostics.isEnabled)
         self.options = options
         options.hardwareDecode = hardwareDecode
         options.asynchronousDecompression = false
@@ -276,7 +287,7 @@ extension FFmpegEngine: MediaPlayerDelegate {
     }
 
     func changeLoadState(player: some MediaPlayerProtocol) {
-        if firstPlayableTime == nil, player.loadState == .playable {
+        if PlaybackDiagnostics.isEnabled, firstPlayableTime == nil, player.loadState == .playable {
             firstPlayableTime = CACurrentMediaTime()
         }
         attachRenderViewIfNeeded()

@@ -15,7 +15,7 @@ import OSLog
 import UIKit
 #endif
 open class KSOptions {
-    public let seekDiagnostics = SeekDiagnostics()
+    public let seekDiagnostics: SeekDiagnostics
     /// 最低缓存视频时间
     @Published
     public var preferredForwardBufferDuration = KSOptions.preferredForwardBufferDuration
@@ -107,7 +107,8 @@ open class KSOptions {
     public internal(set) var readVideoTime = 0.0
     public internal(set) var decodeAudioTime = 0.0
     public internal(set) var decodeVideoTime = 0.0
-    public init() {
+    public init(enableSeekDiagnostics: Bool = false) {
+        seekDiagnostics = SeekDiagnostics(enabled: enableSeekDiagnostics)
         formatContextOptions["user_agent"] = userAgent
         // 参数的配置可以参考protocols.texi 和 http.c
         // 这个一定要，不然有的流就会判断不准FieldOrder

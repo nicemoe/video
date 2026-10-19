@@ -517,13 +517,15 @@ struct VideoPage: View {
             Section("进度定位") {
                 Toggle("精准定位（可能较慢）", isOn: $accurateSeek)
             }
-            Section("问题排查") {
-                Button("复制播放诊断", systemImage: "doc.on.doc") {
-                    guard let engine else { return }
-                    UIPasteboard.general.string = engine.diagnosticReport
-                    show(hint: "播放诊断已复制")
+            if PlaybackDiagnostics.isEnabled {
+                Section("问题排查") {
+                    Button("复制播放诊断", systemImage: "doc.on.doc") {
+                        guard let engine else { return }
+                        UIPasteboard.general.string = engine.diagnosticReport
+                        show(hint: "播放诊断已复制")
+                    }
+                    .disabled(engine == nil)
                 }
-                .disabled(engine == nil)
             }
         } label: {
             Image(systemName: "cpu")

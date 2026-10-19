@@ -5,8 +5,24 @@ import Foundation
         if !value { fatalError(message) }
     }
     static func main() {
+        var clockReads = 0
+        var stringBuilds = 0
+        let disabled = SeekDiagnostics(now: { clockReads += 1; return 100 })
+        func diagnosticText() -> String { stringBuilds += 1; return "unused" }
+        check(!disabled.isEnabled, "Diagnostics enabled by default")
+        for _ in 0..<10_000 {
+            let token = disabled.begin(target: 1002.8, accurate: false)
+            check(token == nil && disabled.token == nil && disabled.mediaToken == nil,
+                  "Disabled diagnostics produced a generation")
+            disabled.demuxCompleted(token: token, result: 0)
+            disabled.mark(diagnosticText(), token: token, detail: diagnosticText())
+            disabled.sample(diagnosticText(), token: token, detail: diagnosticText())
+        }
+        check(clockReads == 0 && stringBuilds == 0 && disabled.report().isEmpty,
+              "Disabled diagnostics collected timings, formatted strings or retained a report")
+        print("PASS: diagnostics off by default; no clock reads, string formatting or recorded events")
         var clock = 100.0
-        let trace = SeekDiagnostics(now: { clock })
+        let trace = SeekDiagnostics(enabled: true, now: { clock })
         check(trace.token == nil && trace.mediaToken == nil, "Trace started before a seek")
         let first = trace.begin(target: 1002.8, accurate: false)
         trace.mark("demux_start", token: first)
