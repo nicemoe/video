@@ -27,6 +27,7 @@ def main():
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True, timeout=30)
         engine = (ROOT / 'Photo/Media/VideoEngine.swift').read_text()
+        engine = engine[engine.index('final class FFmpegEngine:'):]
         engine_test = """
 import Foundation
 enum State { case playing, seeking, finished }
