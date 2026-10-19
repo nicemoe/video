@@ -53,3 +53,6 @@ check_seek_readiness()
 
 from run_ffmpeg_log_tests import main as check_ffmpeg_log
 check_ffmpeg_log()
+
+from run_eof_tests import main as check_eof
+check_eof()

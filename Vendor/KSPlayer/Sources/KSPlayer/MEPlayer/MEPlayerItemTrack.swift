@@ -13,6 +13,7 @@ protocol PlayerItemTrackProtocol: CapacityProtocol, AnyObject {
     // 是否无缝循环
     var isLoopModel: Bool { get set }
     var isEndOfFile: Bool { get set }
+    var isDecodeFinished: Bool { get }
     var delegate: CodecCapacityDelegate? { get set }
     func decode()
     func seek(time: TimeInterval)
@@ -34,6 +35,7 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
     }
 
     var isEndOfFile: Bool = false
+    var isDecodeFinished: Bool { isEndOfFile }
     var packetCount: Int { 0 }
     let description: String
     weak var delegate: CodecCapacityDelegate?
@@ -93,7 +95,7 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
     func getOutputRender(where predicate: ((Frame, Int) -> Bool)?) -> Frame? {
         let outputFecthRender = outputRenderQueue.pop(where: predicate)
         if outputFecthRender == nil {
-            if state == .finished, frameCount == 0 {
+            if isDecodeFinished, frameCount == 0 {
                 delegate?.codecDidFinished(track: self)
             }
         }
@@ -192,6 +194,12 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     private var loopPacketQueue: CircularBuffer<Packet>?
     var packetQueue = CircularBuffer<Packet>()
     override var packetCount: Int { packetQueue.count }
+    override var isDecodeFinished: Bool { state == .finished }
+    override var isEndOfFile: Bool {
+        didSet {
+            if isEndOfFile { packetQueue.finish() }
+        }
+    }
     override var isLoopModel: Bool {
         didSet {
             if isLoopModel {
@@ -202,8 +210,9 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
                     packetQueue.shutdown()
                     packetQueue = loopPacketQueue
                     self.loopPacketQueue = nil
-                    if decodeOperation.isFinished {
-                        decode()
+                    isEndOfFile = false
+                    packetQueue.update(ifGeneration: packetQueue.generation) {
+                        state = .flush
                     }
                 }
             }
@@ -226,8 +235,8 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func decode() {
-        isEndOfFile = false
         guard operationQueue.operationCount == 0 else { return }
+        if state == .idle { state = .decoding }
         decodeOperation = BlockOperation { [weak self] in
             guard let self else { return }
             Thread.current.name = self.operationQueue.name
@@ -240,25 +249,30 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     private func decodeThread() {
-        state = .decoding
-        isEndOfFile = false
         decoderMap.values.forEach { $0.decode() }
         outerLoop: while !decodeOperation.isCancelled {
+            let packets = packetQueue
+            let generation = packets.generation
             switch state {
             case .idle:
                 break outerLoop
-            case .finished, .closed, .failed:
+            case .finished:
+                packets.waitForNewGeneration(after: generation)
+            case .closed, .failed:
                 decoderMap.values.forEach { $0.shutdown() }
                 decoderMap.removeAll()
                 break outerLoop
             case .flush:
                 decoderMap.values.forEach { $0.doFlushCodec() }
-                state = .decoding
+                packets.update(ifGeneration: generation) {
+                    if state == .flush { state = .decoding }
+                }
             case .decoding:
-                if isEndOfFile, packetQueue.count == 0 {
-                    state = .finished
+                if packets.isDrained {
+                    packets.update(ifGeneration: generation) {
+                        if state == .decoding { state = .finished }
+                    }
                 } else {
-                    let generation = packetQueue.generation
                     // Test flush BEFORE removing the item, including after a wait.
                     // Otherwise the first new keyframe is popped and then discarded.
                     guard let packet = packetQueue.pop(wait: true, generation: generation, where: { [weak self] _, _ in
@@ -277,11 +291,7 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func seek(time: TimeInterval) {
-        if decodeOperation.isFinished {
-            decode()
-        }
-        state = .flush
-        packetQueue.flush()
+        packetQueue.flush { self.state = .flush }
         super.seek(time: time)
         loopPacketQueue = nil
     }

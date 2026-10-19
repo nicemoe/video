@@ -18,6 +18,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
     private let expanding: Bool
     private let sorted: Bool
     private var destroyed = false
+    private var inputEnded = false
     private var epoch: UInt64 = 0
     /// A flush starts a new timeline. A waiting consumer must not consume its first item.
     public var generation: UInt64 {
@@ -95,7 +96,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             return nil
         }
         if headIndex == tailIndex {
-            if wait {
+            if wait, !inputEnded {
                 condition.wait()
                 if destroyed || headIndex == tailIndex
                     || (expectedGeneration != nil && expectedGeneration != epoch) {
@@ -120,6 +121,35 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             }
             return item
         }
+    }
+
+    /// EOF must wake an empty packet consumer as well as one still decoding.
+    public func finish() {
+        condition.lock()
+        inputEnded = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    public var isDrained: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return inputEnded && _count == 0
+    }
+
+    /// Serialize a decoder state transition with seek's packet invalidation.
+    public func update(ifGeneration generation: UInt64, _ action: () -> Void) {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !destroyed, epoch == generation else { return }
+        action()
+    }
+
+    /// Keep the decode worker asleep at EOF until a seek or shutdown wakes it.
+    public func waitForNewGeneration(after generation: UInt64) {
+        condition.lock()
+        defer { condition.unlock() }
+        while !destroyed, epoch == generation { condition.wait() }
     }
 
     /// Inspect the next presentation item without consuming it.
@@ -174,6 +204,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
         condition.lock()
         defer { condition.unlock() }
         epoch &+= 1
+        inputEnded = false
         update?()
         headIndex = 0
         tailIndex = 0

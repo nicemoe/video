@@ -30,6 +30,7 @@ public final class MEPlayerItem: Sendable {
     private var videoClock = KSClock()
     private var isFirst = true
     private var isSeek = false
+    private var hasFinishedPlayback = false
     private var allPlayerItemTracks = [PlayerItemTrackProtocol]()
     private var maxFrameDuration = 10.0
     private var videoAudioTracks = [CapacityProtocol]()
@@ -690,6 +691,7 @@ extension MEPlayerItem: MediaPlayback {
     }
 
     public func seek(time: TimeInterval, completion: @escaping ((Bool) -> Void)) {
+        hasFinishedPlayback = false
         if state == .reading || state == .paused {
             seekTime = time
             state = .seeking
@@ -723,6 +725,7 @@ extension MEPlayerItem: CodecCapacityDelegate {
         // The timer may fire while demux seek/queue flushing is still underway.
         // Such a sample belongs to neither the old nor the new ready timeline.
         guard state != .seeking else { return }
+        if finishIfDrained() { return }
         let seekStart = prepareSeekOutput()
         let loadingState = options.playable(capacitys: videoAudioTracks, isFirst: isFirst, isSeek: isSeek)
         options.seekDiagnostics.sample("buffers", token: options.seekDiagnostics.mediaToken,
@@ -754,22 +757,35 @@ extension MEPlayerItem: CodecCapacityDelegate {
     }
 
     func codecDidFinished(track: some CapacityProtocol) {
-        if track.mediaType == .audio {
-            isAudioStalled = true
+        runOnMainThread { [weak self] in
+            guard let self, track.isEndOfFile else { return }
+            if track.mediaType == .audio { self.isAudioStalled = true }
+            self.finishIfDrained()
         }
-        let allSatisfy = videoAudioTracks.allSatisfy { $0.isEndOfFile && $0.frameCount == 0 && $0.packetCount == 0 }
-        if allSatisfy {
-            delegate?.sourceDidFinished()
-            timer.fireDate = Date.distantFuture
-            if options.isLoopPlay {
-                isAudioStalled = audioTrack == nil
-                audioTrack?.isLoopModel = false
-                videoTrack?.isLoopModel = false
-                if state == .finished {
-                    seek(time: 0) { _ in }
-                }
+    }
+
+    @discardableResult
+    private func finishIfDrained() -> Bool {
+        guard !hasFinishedPlayback, state == .finished || options.isLoopPlay,
+              !videoAudioTracks.isEmpty,
+              allPlayerItemTracks.filter({ $0.mediaType == .audio || $0.mediaType == .video })
+                .allSatisfy({ $0.isEndOfFile && $0.isDecodeFinished && $0.frameCount == 0 && $0.packetCount == 0 })
+        else { return hasFinishedPlayback }
+        hasFinishedPlayback = true
+        timer.fireDate = Date.distantFuture
+        if options.isLoopPlay {
+            isAudioStalled = audioTrack == nil
+            audioTrack?.isLoopModel = false
+            videoTrack?.isLoopModel = false
+            if state == .finished {
+                seek(time: 0) { _ in }
+            } else {
+                hasFinishedPlayback = false
+                timer.fireDate = Date.distantPast
             }
         }
+        delegate?.sourceDidFinished()
+        return true
     }
 
     private func adaptableVideo(loadingState: LoadingState) {

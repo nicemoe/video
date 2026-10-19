@@ -6,7 +6,7 @@ import AVFoundation
 
 enum MediaLoadState { case idle, loading, playable }
 enum MediaPlaybackState { case idle, seeking, playing, paused, finished }
-enum SourceState { case reading, paused, seeking }
+enum SourceState { case reading, paused, seeking, finished }
 var events: [String] = []
 func runOnMainThread(_ body: () -> Void) { body() }
 func expect(_ condition: Bool, _ message: String) {
@@ -62,6 +62,8 @@ final class TestTrack: CapacityProtocol {
     var fps: Float = 48
     var frameMaxCount = 32
     var isEndOfFile = false
+    var isDecodeFinished = false
+    var isLoopModel = false
     init(_ mediaType: AVMediaType) { self.mediaType = mediaType }
     /* PRODUCTION_DISCARD_FRAMES */
 }
@@ -92,8 +94,10 @@ final class VideoDevice {
     func readNextFrame() { previews += 1; events.append("video") }
 }
 final class Delegate {
+    var finishes = 0
+    func playBack(player: TestPlayer, loopCount: Int) {}
     func changeLoadState(player: TestPlayer) {}
-    func finish(player: TestPlayer, error: Error?) {}
+    func finish(player: TestPlayer, error: Error?) { finishes += 1 }
 }
 
 final class TestItem {
@@ -103,6 +107,11 @@ final class TestItem {
     var isFirst = false
     var isSeek = false
     var currentTime = 5.0
+    var hasFinishedPlayback = false
+    var isAudioStalled = false
+    var allPlayerItemTracks: [TestTrack] = []
+    let timer = Timer(timeInterval: 0.05, repeats: true) { _ in }
+    /* PRODUCTION_FINISH_IF_DRAINED */
     var target = 0.0
     var completion: ((Bool) -> Void)?
     var videoAudioTracks: [CapacityProtocol] = []
@@ -112,6 +121,7 @@ final class TestItem {
     var videoClock = TestClock()
     /* PRODUCTION_PREPARE_SEEK_OUTPUT */
     func seek(time: TimeInterval, completion: @escaping (Bool) -> Void) {
+        hasFinishedPlayback = false
         target = time
         state = .seeking
         self.completion = completion
@@ -135,6 +145,8 @@ final class TestItem {
 }
 
 final class TestPlayer {
+    var loopCount = 0
+    /* PRODUCTION_SOURCE_FINISHED */
     let options = TestOptions()
     let audioOutput = AudioDevice()
     var videoOutput: VideoDevice? = VideoDevice()
@@ -195,6 +207,46 @@ final class TestPlayer {
             expect(events == ["video", "audio"], "Target picture must be submitted before audio resumes")
             expect(!item.isSeek, "Ready seek state was not cleared")
         }
+        // An exact end seek can produce no target frames. Completion must be
+        // observed by capacity polling even while renderers remain paused/loading.
+        let ended = TestPlayer()
+        let endItem = ended.playerItem
+        let endAudio = TestTrack(.audio)
+        let endVideo = TestTrack(.video)
+        endItem.allPlayerItemTracks = [endAudio, endVideo]
+        endItem.videoAudioTracks = [endAudio, endVideo]
+        ended.seek(time: ended.duration) { _ in ended.play() }
+        endItem.finishSeek()
+        endItem.state = .finished
+        for track in [endAudio, endVideo] {
+            track.isEndOfFile = true
+            track.packetCount = 0
+        }
+        endItem.codecDidChangeCapacity()
+        expect(ended.delegate!.finishes == 0, "Demux EOF finished before decoding completed")
+        for track in [endAudio, endVideo] { track.isDecodeFinished = true }
+        endVideo.outputRenderQueue.push(TestFrame(timestamp: 2000, duration: 33))
+        endItem.codecDidChangeCapacity()
+        expect(ended.delegate!.finishes == 0, "EOF discarded a queued final frame")
+        _ = endVideo.outputRenderQueue.pop()
+        for _ in 0..<10 { endItem.codecDidChangeCapacity() }
+        expect(ended.playbackState == .finished && ended.delegate!.finishes == 1,
+               "Empty terminal seek did not finish exactly once")
+        expect(!ended.audioOutput.running && !ended.videoOutput!.running,
+               "EOF left output devices playing")
+        ended.seek(time: 60) { _ in ended.play() }
+        endItem.finishSeek()
+        for track in [endAudio, endVideo] {
+            track.isEndOfFile = false
+            track.isDecodeFinished = false
+            track.packetCount = 100
+        }
+        endItem.frames(audio: 2, video: 2)
+        endItem.codecDidChangeCapacity()
+        expect(ended.audioOutput.running && ended.videoOutput!.running,
+               "Playback did not resume after seeking away from EOF")
+        print("PASS: terminal seek finishes once, waits for last decode/frame, and replays after backward seek")
+
         let paused = TestPlayer()
         paused.pause()
         paused.seek(time: 60.2) { _ in paused.pause() }

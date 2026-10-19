@@ -218,7 +218,9 @@ final class FFmpegEngine: NSObject, VideoEngine {
 
     func seek(to seconds: Double, accurate: Bool) {
         guard seconds.isFinite, !stopped else { return }
-        pendingSeek = (max(0, seconds), accurate)
+        let target = duration > 0 ? min(max(0, seconds), duration) : max(0, seconds)
+        // The end of the slider means EOF, not the preceding keyframe/GOP.
+        pendingSeek = (target, accurate || (duration > 0 && target >= duration))
         performPendingSeek()
     }
 

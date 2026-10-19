@@ -35,6 +35,8 @@ def main():
             ['public protocol CapacityProtocol', 'extension CapacityProtocol', 'public struct LoadingState']),
         'PLAYABLE': block(options, 'open func playable('),
         'CAPACITY_UPDATE': block(item, 'func codecDidChangeCapacity()'),
+        'FINISH_IF_DRAINED': block(item, '    private func finishIfDrained()'),
+        'SOURCE_FINISHED': block(player, '    func sourceDidFinished()'),
         'PREPARE_SEEK_OUTPUT': block(item, 'private func prepareSeekOutput()'),
         'DISCARD_FRAMES': block((BASE / 'MEPlayer/MEPlayerItemTrack.swift').read_text(), 'func discardFrames(before '),
         'LOAD_STATE': block(player, 'public private(set) var loadState ='),
