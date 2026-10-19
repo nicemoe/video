@@ -20,3 +20,12 @@ with tempfile.TemporaryDirectory(prefix='multimedia-tests-') as output:
     subprocess.run([compiler, '-swift-version', '5', '-parse-as-library',
                     *[str(root / source) for source in sources], '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
+
+    seek_binary = Path(output) / 'seek-queue-tests'
+    seek_sources = [
+        'Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/CircularBuffer.swift',
+        'Tools/Checks/SeekQueueRegressionTests.swift',
+    ]
+    subprocess.run([compiler, '-swift-version', '5', '-parse-as-library',
+                    *[str(root / source) for source in seek_sources], '-o', str(seek_binary)], check=True)
+    subprocess.run([str(seek_binary)], check=True)

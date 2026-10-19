@@ -112,7 +112,7 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			packageReferences = (
-				1A0000000000000000000021 /* XCRemoteSwiftPackageReference "KSPlayer" */,
+				1A0000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/KSPlayer" */,
 				1A0000000000000000000024 /* XCRemoteSwiftPackageReference "FFmpegKit" */,
 			);
 			productRefGroup = 1A0000000000000000000003 /* Products */;
@@ -311,15 +311,14 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+        1A0000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/KSPlayer" */ = {
+            isa = XCLocalSwiftPackageReference;
+            relativePath = Vendor/KSPlayer;
+        };
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
-		1A0000000000000000000021 /* XCRemoteSwiftPackageReference "KSPlayer" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/kingslay/KSPlayer.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.3.4;
-			};
-		};
 		1A0000000000000000000024 /* XCRemoteSwiftPackageReference "FFmpegKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/kingslay/FFmpegKit.git";
@@ -330,7 +329,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		1A0000000000000000000022 /* KSPlayer */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 1A0000000000000000000021 /* XCRemoteSwiftPackageReference "KSPlayer" */;
+			package = 1A0000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/KSPlayer" */;
 			productName = KSPlayer;
 		};
 		1A0000000000000000000025 /* FFmpegKit */ = {
