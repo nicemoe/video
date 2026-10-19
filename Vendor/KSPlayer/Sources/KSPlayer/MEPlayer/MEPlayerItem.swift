@@ -97,21 +97,29 @@ public final class MEPlayerItem: Sendable {
             guard let format else {
                 return
             }
-            var log = String(cString: format)
-            let arguments: CVaListPointer? = args
-            if let arguments {
-                log = NSString(format: log, arguments: arguments) as String
-            }
+            // FFmpeg sends every level to custom callbacks. Reject disabled
+            // messages before allocating/formatting their strings: MOV indexing
+            // emits a trace for every sample, even in release builds.
+            let level = level >= 0 ? level & 0xff : level
+            var filterOptions: KSOptions?
             if let ptr {
                 let avclass = ptr.assumingMemoryBound(to: UnsafePointer<AVClass>.self).pointee
                 if avclass == avfilter_get_class() {
                     let context = ptr.assumingMemoryBound(to: AVFilterContext.self).pointee
                     if let opaque = context.graph?.pointee.opaque {
-                        let options = Unmanaged<KSOptions>.fromOpaque(opaque).takeUnretainedValue()
-                        options.filter(log: log)
+                        filterOptions = Unmanaged<KSOptions>.fromOpaque(opaque).takeUnretainedValue()
                     }
                 }
             }
+            // Filter analysis (for example idet) consumes logs independently
+            // of the console level, so keep that path intact.
+            guard level <= KSOptions.logLevel.rawValue || filterOptions != nil else { return }
+            var log = String(cString: format)
+            let arguments: CVaListPointer? = args
+            if let arguments {
+                log = NSString(format: log, arguments: arguments) as String
+            }
+            filterOptions?.filter(log: log)
             // 找不到解码器
             if log.hasPrefix("parser not found for codec") {
                 KSLog(level: .error, log)

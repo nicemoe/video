@@ -50,3 +50,6 @@ with tempfile.TemporaryDirectory(prefix='multimedia-tests-') as output:
 
 from run_seek_readiness_tests import main as check_seek_readiness
 check_seek_readiness()
+
+from run_ffmpeg_log_tests import main as check_ffmpeg_log
+check_ffmpeg_log()

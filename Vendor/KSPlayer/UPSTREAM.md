@@ -17,3 +17,5 @@ Seek diagnostics: bounded in-memory stage timings, queue/clock samples and displ
 Fast seek alignment: discard decoded audio preroll before the first video frame, install the same boundary for incoming audio, and rebase both clocks before declaring playback ready. Compressed reference packets remain intact. The real build-12 ASF timestamp trace is covered by regression and mutation tests.
 
 First-open resume: skip the eager initial preview while a seek is pending; retain the first target frame until audio preroll alignment and target readiness. Production-method regression tests cover both first-open and in-session seeks, with mutation checks for the previous preview behavior.
+
+MP4 opening: filter disabled FFmpeg log levels before Swift string conversion and printf formatting. MOV sample-index traces no longer incur formatting cost at warning verbosity; filter-analysis callbacks and enabled messages remain available. Regression tests instrument the production callback and reject the former late filtering.
