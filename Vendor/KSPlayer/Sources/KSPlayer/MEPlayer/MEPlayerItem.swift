@@ -699,6 +699,9 @@ extension MEPlayerItem: MediaPlayback {
 
 extension MEPlayerItem: CodecCapacityDelegate {
     func codecDidChangeCapacity() {
+        // The timer may fire while demux seek/queue flushing is still underway.
+        // Such a sample belongs to neither the old nor the new ready timeline.
+        guard state != .seeking else { return }
         let loadingState = options.playable(capacitys: videoAudioTracks, isFirst: isFirst, isSeek: isSeek)
         delegate?.sourceDidChange(loadingState: loadingState)
         if loadingState.isPlayable {

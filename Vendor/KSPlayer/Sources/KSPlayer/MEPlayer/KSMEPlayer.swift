@@ -259,6 +259,11 @@ extension KSMEPlayer: MEPlayerDelegate {
             }
             var progress = 100
             if loadingState.isPlayable {
+                if loadingState.isSeek {
+                    // Show the first target frame before audio starts; also update
+                    // the picture when seeking while the user has paused playback.
+                    videoOutput?.readNextFrame()
+                }
                 loadState = .playable
             } else {
                 if loadingState.progress.isInfinite {
@@ -355,6 +360,9 @@ extension KSMEPlayer: MediaPlayerProtocol {
     public func seek(time: TimeInterval, completion: @escaping ((Bool) -> Void)) {
         let time = max(time, 0)
         playbackState = .seeking
+        // A successful demux seek does not mean that target video is decoded.
+        // Invalidate the old playable state before the caller can request play.
+        loadState = .loading
         runOnMainThread { [weak self] in
             self?.bufferingProgress = 0
         }
@@ -371,7 +379,7 @@ extension KSMEPlayer: MediaPlayerProtocol {
                 runOnMainThread { [weak self] in
                     guard let self else { return }
                     if let controlTimebase = self.videoOutput?.displayLayer.controlTimebase {
-                        CMTimebaseSetTime(controlTimebase, time: CMTimeMake(value: Int64(self.currentPlaybackTime), timescale: 1))
+                        CMTimebaseSetTime(controlTimebase, time: CMTime(seconds: self.currentPlaybackTime, preferredTimescale: 1_000_000))
                     }
                 }
             }

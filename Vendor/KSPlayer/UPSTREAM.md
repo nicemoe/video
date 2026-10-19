@@ -9,3 +9,5 @@ Original Sources and LICENSE are retained. The package manifest uses the same FF
 Local changes: seek queue generations prevent an interrupted read from consuming the first packet of the new timeline; decoder flush occurs before decoding that packet. Old-generation decoded frames are rejected before entering the render queue.
 
 Seek latency changes: preserve fractional target times; skip preroll video pixel conversion after decoding/filtering; allow local seek readiness from decoded frames. Decoder packet/reference handling remains intact. See Docs/PlaybackSeeking.md for controlled media comparisons and device-validation limits.
+
+Seek readiness: invalidate the previous playable state before seeking; ignore capacity samples during demux seek; submit the first target frame before resuming audio. Preserve fractional display timebase values. Production-method regression tests cover audio-first decoding and paused seeks.
