@@ -172,10 +172,10 @@ final class HTTPServer: @unchecked Sendable {
             connections.removeAll()
             return result
         }
-        let (generation, old, all) = resources
+        let (stoppedGeneration, old, all) = resources
         old?.cancel()
         all.forEach { $0.close() }
-        return generation
+        return stoppedGeneration
     }
 
     /// 手上还有没有连着的客户端。
