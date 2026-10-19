@@ -228,6 +228,14 @@ struct RootView: View {
             if phase == .active { Task { await syncDisk() } }
         }
         .task { await syncDisk() }
+        .alert("操作失败", isPresented: Binding(
+            get: { store.operationError != nil },
+            set: { if !$0 { store.operationError = nil } }
+        )) {
+            Button("好") { store.operationError = nil }
+        } message: {
+            Text(store.operationError ?? "")
+        }
         .toast($toastItem)
     }
 

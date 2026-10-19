@@ -25,10 +25,10 @@ enum MultipartStream {
     /// - Parameters:
     ///   - fileURL: 请求体文件
     ///   - directory: 各段正文写到哪儿；调用方负责用完删掉
-    static func parse(fileURL: URL, boundary: String, into directory: URL) -> [Part] {
-        guard let reader = try? FileHandle(forReadingFrom: fileURL) else { return [] }
+    static func parse(fileURL: URL, boundary: String, into directory: URL) throws -> [Part] {
+        let reader = try FileHandle(forReadingFrom: fileURL)
         defer { try? reader.close() }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let delim = Array("\r\n--\(boundary)".utf8)
         let crlf2 = Array("\r\n\r\n".utf8)
@@ -41,28 +41,33 @@ enum MultipartStream {
         var parts: [Part] = []
         var state = State.seek
         var eof = false
+        var complete = false
 
         var headerBytes: [UInt8] = []
         var writer: FileHandle?
         var partURL: URL?
         var written = 0
+        defer { try? writer?.close() }
 
-        func openPart() {
+        func openPart() throws {
             let url = directory.appendingPathComponent(UUID().uuidString)
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-            writer = try? FileHandle(forWritingTo: url)
+            guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            writer = try FileHandle(forWritingTo: url)
             partURL = url
             written = 0
         }
 
-        func write(_ bytes: ArraySlice<UInt8>) {
+        func write(_ bytes: ArraySlice<UInt8>) throws {
             guard !bytes.isEmpty else { return }
-            try? writer?.write(contentsOf: Data(bytes))
+            guard let writer else { throw CocoaError(.fileWriteUnknown) }
+            try writer.write(contentsOf: Data(bytes))
             written += bytes.count
         }
 
-        func closePart() {
-            try? writer?.close()
+        func closePart() throws {
+            try writer?.close()
             writer = nil
             guard let url = partURL else { return }
             var part = Part(fileURL: url, byteCount: written)
@@ -72,8 +77,8 @@ enum MultipartStream {
         }
 
         loop: while true {
-            if !eof, window.count < delim.count + 4096 {
-                if let data = try? reader.read(upToCount: chunkSize), !data.isEmpty {
+            if !eof, window.count < delim.count + 4096 || state == .headers {
+                if let data = try reader.read(upToCount: chunkSize), !data.isEmpty {
                     window.append(contentsOf: data)
                 } else {
                     eof = true
@@ -96,7 +101,7 @@ enum MultipartStream {
                     if eof { break loop }
                     continue
                 }
-                if window[0] == 0x2D && window[1] == 0x2D { break loop }        // "--" 收尾
+                if window[0] == 0x2D && window[1] == 0x2D { complete = true; break loop }        // "--" 收尾
                 if window[0] == 0x0D && window[1] == 0x0A {                      // CRLF，新的一段
                     window.removeFirst(2)
                     state = .headers
@@ -108,29 +113,27 @@ enum MultipartStream {
                 if let i = find(crlf2, in: window, from: 0) {
                     headerBytes = Array(window[0..<i])
                     window.removeFirst(i + crlf2.count)
-                    openPart()
+                    try openPart()
                     state = .body
                 } else {
+                    guard window.count <= 64 * 1024 else { throw CocoaError(.fileReadCorruptFile) }
                     if eof { break loop }
                 }
 
             case .body:
                 if let i = find(delim, in: window, from: 0) {
-                    write(window[0..<i])
+                    try write(window[0..<i])
                     window.removeFirst(i + delim.count)
-                    closePart()
+                    try closePart()
                     state = .after
                 } else {
                     if eof {
-                        write(window[0...])
-                        window.removeAll()
-                        closePart()
-                        break loop
+                        throw CocoaError(.fileReadCorruptFile)
                     }
                     // 尾部这一小截先别写，它可能是分隔符的前半截
                     if window.count > keep {
                         let cut = window.count - keep
-                        write(window[0..<cut])
+                        try write(window[0..<cut])
                         window.removeFirst(cut)
                     }
                 }
@@ -142,6 +145,7 @@ enum MultipartStream {
             try? writer?.close()
             try? FileManager.default.removeItem(at: url)
         }
+        guard complete else { throw CocoaError(.fileReadCorruptFile) }
         return parts
     }
 

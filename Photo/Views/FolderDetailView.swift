@@ -181,9 +181,9 @@ struct FolderDetailView: View {
         .sheet(isPresented: $showMoveSheet) {
             DestinationPickerSheet(title: "移动 \(selection.count) 张照片", excludingFolder: folderID) { target in
                 let ids = selection
-                store.moveAssets(ids, from: folderID, to: target)
+                let moved = store.moveAssets(ids, from: folderID, to: target)
                 withAnimation { isSelecting = false; selection.removeAll() }
-                toastItem = Toast(icon: "arrow.right.circle.fill", text: "已移动 \(ids.count) 张")
+                toastItem = Toast(icon: "arrow.right.circle.fill", text: "已移动 \(moved) 个，未移动 \(ids.count - moved) 个")
             }
         }
         .confirmationDialog("删除 \(selection.count) 张照片？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {

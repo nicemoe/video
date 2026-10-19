@@ -274,12 +274,16 @@ struct VideoPage: View {
             guard isCurrent else { return }
             onPlaybackChange?(playing)
         }
-        // 退到后台之后可能就再也回不来了——人上划一抹 App 就没了，
-        // onDisappear 不会走。所以趁这一下先把进度交出去，播放本身不动，
-        // 切回来还能接着放。
+        // 系统退后台时会停播，但不会更新这里的 isPlaying。
+        // 离开前台就同时暂停引擎和界面；回来保持暂停，点一次即可继续。
         .onChange(of: scenePhase) { _, phase in
-            guard phase != .active, current > 0.5 else { return }
-            onLeave?(current)
+            guard isCurrent, phase != .active else { return }
+            engine?.pause()
+            isPlaying = false
+            scrubbing = false
+            dragMode = nil
+            // 保存进度的门槛不能影响暂停，刚开播就退后台也要同步状态。
+            if current > 0.5 { onLeave?(current) }
         }
         .onDisappear {
             stop()
@@ -719,8 +723,9 @@ struct VideoPage: View {
             }
         }
 
-        made.play()
-        isPlaying = true
+        // 页面重建或硬解回退可能发生在后台，此时不能重新启动播放。
+        isPlaying = scenePhase == .active
+        if isPlaying { made.play() }
     }
 
     /// 退出预览时把音频会话让出去。
@@ -740,6 +745,8 @@ struct VideoPage: View {
     /// 三种走法。注意「连续播放」在没有下一个的时候要退回停下——
     /// 不然最后一个播完会一直显示成在播，进度条停在末尾，人还等着它动。
     private func finish() {
+        // 退后台后到达的结束回调不能触发循环或自动播放下一个。
+        guard isCurrent, scenePhase == .active, isPlaying else { return }
         if duration > 0 { current = duration }
         switch mode {
         case .once:
@@ -786,7 +793,7 @@ struct VideoPage: View {
     }
 
     private func toggle() {
-        guard let engine else { return }
+        guard scenePhase == .active, let engine else { return }
         if isPlaying {
             engine.pause()
         } else {

@@ -80,7 +80,13 @@ enum Paths {
 @Observable
 final class LibraryStore {
 
-    private(set) var library = Library()
+    private(set) var library = Library() {
+        didSet { assetsByID = nil }
+    }
+    @ObservationIgnored private var assetsByID: [UUID: Asset]?
+    var operationError: String?
+    @ObservationIgnored private lazy var writer = SnapshotWriter(url: Paths.libraryFile)
+    private var saveRevision: UInt64 = 0
 
     /// 正在和磁盘对账。挡住重入，见 syncWithDisk。
     var isSyncing = false
@@ -123,37 +129,32 @@ final class LibraryStore {
 
     private var saveTask: Task<Void, Never>?
 
-    /// 合并 0.4s 内的多次写入，避免批量导入时反复落盘
+    /// 合并连续修改，只在真正保存时取最新快照。
     private func scheduleSave() {
         saveTask?.cancel()
-        let snapshot = library
-        saveTask = Task { [snapshot] in
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            await Self.write(snapshot)
+        saveTask = Task {
+            do { try await Task.sleep(for: .milliseconds(400)) }
+            catch { return }
+            saveNow()
         }
     }
 
     func saveNow() {
         saveTask?.cancel()
+        saveTask = nil
+        saveRevision += 1
+        let revision = saveRevision
         let snapshot = library
-        Task.detached(priority: .utility) { await Self.write(snapshot) }
+        let writer = writer
+        Task {
+            do { try await writer.write(snapshot, revision: revision) }
+            catch {
+                operationError = "图库保存失败：\(error.localizedDescription)"
+            }
+        }
     }
 
-    /// 服务端逐个收文件时用。
-    ///
-    /// 和 saveNow 的区别只在要不要合并。网页那边挑一整个相册上传，是几千个
-    /// 请求挨着来，每来一个就整份索引写一遍的话，写入量是文件数的平方——
-    /// 一万个文件累计约 13 GB。合并之后连着来的并成一次。
-    ///
-    /// 掉最后 400ms 的记录不要紧：文件已经落在 Media 里，下次启动对账会把
-    /// 它收回来。索引不是唯一的真相，磁盘才是。
     func scheduleSaveFromServer() { scheduleSave() }
-
-    private nonisolated static func write(_ snapshot: Library) async {
-        guard let data = try? Coders.makeEncoder().encode(snapshot) else { return }
-        try? data.write(to: Paths.libraryFile, options: .atomic)
-    }
 
     // MARK: 查询
 
@@ -252,12 +253,17 @@ final class LibraryStore {
     }
 
     func asset(_ id: UUID) -> Asset? {
-        for g in library.groups {
-            for f in g.folders {
-                if let a = f.assets.first(where: { $0.id == id }) { return a }
+        // 一轮库变更后只建一次；后续缩略图请求按 ID 直接查找。
+        if assetsByID == nil {
+            var index: [UUID: Asset] = [:]
+            for group in library.groups {
+                for folder in group.folders {
+                    for asset in folder.assets { index[asset.id] = asset }
+                }
             }
+            assetsByID = index
         }
-        return nil
+        return assetsByID?[id]
     }
 
     /// 记下这个视频看到第几秒了。
@@ -439,48 +445,44 @@ final class LibraryStore {
     }
 
     /// 把目录（连同子树）挂到别处。parent 为 nil 表示挂在目标分组的根下。
-    func moveFolder(_ id: UUID, toGroup targetGroupID: UUID, parent parentID: UUID? = nil) {
-        guard id != parentID,
-              let (gi, fi) = locate(folder: id),
-              let ti = library.groups.firstIndex(where: { $0.id == targetGroupID }) else { return }
-
+    @discardableResult
+    func moveFolder(_ id: UUID, toGroup targetGroupID: UUID, parent parentID: UUID? = nil) -> Bool {
+        guard id != parentID, let (gi, _) = locate(folder: id),
+              let ti = library.groups.firstIndex(where: { $0.id == targetGroupID }),
+              let oldPath = dirPath(ofFolder: id) else { return false }
+        let moving = library.groups[gi].subtree(of: id)
+        let movingIDs = Set(moving.map(\.id))
         if let parentID {
-            // 目标父目录得真的在目标分组里
-            guard library.groups[ti].folders.contains(where: { $0.id == parentID }) else { return }
-            // 不能移进自己的子孙里——那样这棵子树就从树上断开了，谁也访问不到，
-            // 界面上还会因为 parent 链成环而走不到头
-            if ti == gi, library.groups[gi].subtree(of: id).contains(where: { $0.id == parentID }) {
-                return
-            }
+            guard library.groups[ti].folders.contains(where: { $0.id == parentID }),
+                  !movingIDs.contains(parentID) else { return false }
         }
-
-        let oldPath = dirPath(ofFolder: id)
-
-        if ti == gi {
-            library.groups[gi].folders[fi].parentID = parentID
+        guard let root = moving.first(where: { $0.id == id }) else { return false }
+        let taken = Set(library.groups[ti].folders.filter {
+            $0.id != id && $0.parentID == parentID
+        }.map(\.dirName))
+        let newDir = MediaLayout.unique(MediaLayout.sanitize(root.name), taken: taken)
+        let parentPath: String
+        if let parentID {
+            guard let path = dirPath(ofFolder: parentID) else { return false }
+            parentPath = path
         } else {
-            // 跨分组要把整棵子树一起搬走，只搬根节点的话子目录会留在原分组变成孤儿
-            var moving = library.groups[gi].subtree(of: id)
-            let movingIDs = Set(moving.map(\.id))
-            library.groups[gi].folders.removeAll { movingIDs.contains($0.id) }
-            if let root = moving.firstIndex(where: { $0.id == id }) {
-                moving[root].parentID = parentID
-            }
-            library.groups[ti].folders.append(contentsOf: moving)
+            parentPath = library.groups[ti].dirName
         }
-
-        // 换了地方就可能和新邻居重名，重新挑一个再把磁盘上的目录搬过去
-        if let (ngi, nfi) = locate(folder: id) {
-            let taken = Set(library.groups[ngi].folders.enumerated().compactMap {
-                ($0.offset == nfi || $0.element.parentID != parentID) ? nil : $0.element.dirName
-            })
-            library.groups[ngi].folders[nfi].dirName =
-                MediaLayout.unique(MediaLayout.sanitize(library.groups[ngi].folders[nfi].name), taken: taken)
+        let newPath = parentPath + "/" + newDir
+        if oldPath != newPath, !relocate(from: oldPath, to: newPath) {
+            return false
         }
-        if let oldPath, let newPath = dirPath(ofFolder: id) {
-            relocate(from: oldPath, to: newPath)
+        // relocate 已更新媒体路径，再修改目录归属。
+        var updated = library.groups[gi].subtree(of: id)
+        for i in updated.indices where updated[i].id == id {
+            updated[i].parentID = parentID
+            updated[i].dirName = newDir
         }
+        library.groups[gi].folders.removeAll { movingIDs.contains($0.id) }
+        library.groups[ti].folders.append(contentsOf: updated)
+        forgetClaimedNames()
         scheduleSave()
+        return true
     }
 
     /// 在同一父目录下重排。
@@ -568,28 +570,16 @@ final class LibraryStore {
     /// 读进内存直接会被系统杀掉。这里只做文件搬移和元信息探测。
     nonisolated static func persistVideo(from source: URL, to target: URL,
                                          relativePath: String,
-                                         originalName: String = "") async -> Asset? {
-        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
+                                         originalName: String = "") async throws -> Asset {
+        let info = try await VideoProbe.inspect(source)
+        let attrs = try FileManager.default.attributesOfItem(atPath: source.path)
+        guard let bytes = attrs[.size] as? Int else { throw CocoaError(.fileReadUnknown) }
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
-
-        do {
-            // 先试移动。同卷内是改目录项，不复制字节，几百 MB 也是瞬间完成。
-            // 跨卷（临时目录常常和 Documents 不同卷）会失败，再退回复制。
-            do { try FileManager.default.moveItem(at: source, to: target) }
-            catch { try FileManager.default.copyItem(at: source, to: target) }
-        } catch {
-            return nil
-        }
-
-        let info = await VideoProbe.inspect(target)
-        let bytes = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int) ?? 0
-
+        try FileManager.default.moveItem(at: source, to: target)
         return Asset(fileName: relativePath,
-                     originalName: Self.displayName(from: originalName),
-                     kind: .video,
-                     width: info.width,
-                     height: info.height,
-                     byteCount: bytes ?? 0,
+                     originalName: Self.displayName(from: originalName), kind: .video,
+                     width: info.width, height: info.height, byteCount: bytes,
                      duration: info.duration)
     }
 
@@ -604,10 +594,15 @@ final class LibraryStore {
         if ext.isEmpty { ext = "mp4" }
 
         let (relative, target) = destination(inDir: dir, rawName: name, fallbackExt: ext)
-        guard let asset = await LibraryStore.persistVideo(from: source, to: target,
-                                                          relativePath: relative,
-                                                          originalName: name) else { return nil }
-        return attach(asset, to: folderID) ? asset : nil
+        do {
+            let asset = try await LibraryStore.persistVideo(from: source, to: target,
+                                                            relativePath: relative,
+                                                            originalName: name)
+            return attach(asset, to: folderID) ? asset : nil
+        } catch {
+            operationError = "视频导入失败：\(error.localizedDescription)"
+            return nil
+        }
     }
 
     func deleteAssets(_ ids: Set<UUID>, from folderID: UUID) {
@@ -618,33 +613,36 @@ final class LibraryStore {
         scheduleSave()
     }
 
-    func moveAssets(_ ids: Set<UUID>, from folderID: UUID, to targetFolderID: UUID) {
+    @discardableResult
+    func moveAssets(_ ids: Set<UUID>, from folderID: UUID, to targetFolderID: UUID) -> Int {
         guard folderID != targetFolderID,
               let (gi, fi) = locate(folder: folderID),
-              let (tgi, tfi) = locate(folder: targetFolderID) else { return }
-        var moving = library.groups[gi].folders[fi].assets.filter { ids.contains($0.id) }
-        guard !moving.isEmpty, let dir = dirPath(ofFolder: targetFolderID) else { return }
-
-        // 记录搬完了，磁盘上的文件也得搬——不然新目录里是空的，
-        // 而旧目录里躺着一堆库里已经不认的文件
+              let (tgi, tfi) = locate(folder: targetFolderID),
+              let dir = dirPath(ofFolder: targetFolderID) else { return 0 }
+        let candidates = library.groups[gi].folders[fi].assets.filter { ids.contains($0.id) }
         let dirURL = Paths.media.appendingPathComponent(dir)
-        try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
-        var taken = MediaLayout.names(in: dirURL)
-        for i in moving.indices {
-            let src = Paths.url(for: moving[i])
-            let leaf = (moving[i].fileName as NSString).lastPathComponent
-            let unique = MediaLayout.uniqueFile(stem: (leaf as NSString).deletingPathExtension,
-                                                ext: (leaf as NSString).pathExtension,
-                                                taken: taken)
-            taken.insert(unique)
-            let dst = dirURL.appendingPathComponent(unique)
-            try? FileManager.default.moveItem(at: src, to: dst)
-            moving[i].fileName = dir.isEmpty ? unique : dir + "/" + unique
+        var moved = 0
+        defer { if moved > 0 { forgetClaimedNames(); scheduleSave() } }
+        do {
+            try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+            var taken = MediaLayout.names(in: dirURL)
+            for var asset in candidates {
+                let leaf = (asset.fileName as NSString).lastPathComponent
+                let unique = MediaLayout.uniqueFile(stem: (leaf as NSString).deletingPathExtension,
+                                                    ext: (leaf as NSString).pathExtension,
+                                                    taken: taken)
+                try FileManager.default.moveItem(at: Paths.url(for: asset),
+                                                 to: dirURL.appendingPathComponent(unique))
+                taken.insert(unique)
+                asset.fileName = dir + "/" + unique
+                library.groups[gi].folders[fi].assets.removeAll { $0.id == asset.id }
+                library.groups[tgi].folders[tfi].assets.append(asset)
+                moved += 1
+            }
+        } catch {
+            operationError = "已移动 \(moved) 个，剩余文件未移动：\(error.localizedDescription)"
         }
-
-        library.groups[gi].folders[fi].assets.removeAll { ids.contains($0.id) }
-        library.groups[tgi].folders[tfi].assets.append(contentsOf: moving)
-        scheduleSave()
+        return moved
     }
 
     // MARK: 磁盘布局
@@ -682,12 +680,13 @@ final class LibraryStore {
 
         let src = Paths.media.appendingPathComponent(old)
         let dst = Paths.media.appendingPathComponent(new)
-        if FileManager.default.fileExists(atPath: src.path) {
-            guard !FileManager.default.fileExists(atPath: dst.path) else { return false }
-            try? FileManager.default.createDirectory(at: dst.deletingLastPathComponent(),
+        do {
+            try FileManager.default.createDirectory(at: dst.deletingLastPathComponent(),
                                                      withIntermediateDirectories: true)
-            do { try FileManager.default.moveItem(at: src, to: dst) }
-            catch { return false }
+            try FileManager.default.moveItem(at: src, to: dst)
+        } catch {
+            operationError = "移动目录失败，原记录已保留：\(error.localizedDescription)"
+            return false
         }
 
         let oldPrefix = old + "/", newPrefix = new + "/"
@@ -771,13 +770,15 @@ final class LibraryStore {
     ///
     /// 视频封面是单独落盘的（Posters/<资产 id>.jpg），记录摘了它不会自己消失，
     /// 得一起删——不然在访达里删几百个视频，Posters 里就留几百张没人认领的图。
-    func removeAssets(notIn existing: Set<String>) -> Int {
+    func removeAssets(notIn existing: Set<String>, scanned: [UUID: String]) -> Int {
         var removed = 0
         for gi in library.groups.indices {
             for fi in library.groups[gi].folders.indices {
                 let before = library.groups[gi].folders[fi].assets.count
                 library.groups[gi].folders[fi].assets.removeAll { asset in
-                    let gone = !existing.contains(asset.fileName.lowercased())
+                    let gone = scanned[asset.id] == asset.fileName
+                        && !existing.contains(asset.fileName.lowercased())
+                        && !FileManager.default.fileExists(atPath: Paths.url(for: asset).path)
                     if gone {
                         ThumbnailCache.shared.invalidate(asset.id)
                         if asset.isVideo {

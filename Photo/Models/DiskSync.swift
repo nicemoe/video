@@ -27,14 +27,23 @@ extension LibraryStore {
         isSyncing = true
         defer { isSyncing = false }
 
+        let scanned = Dictionary(uniqueKeysWithValues: library.groups.flatMap {
+            $0.folders.flatMap { $0.assets.map { ($0.id, $0.fileName) } }
+        })
+
         // 扫盘甩到后台：一万张照片走一遍目录树要几百毫秒，
         // 压在主线程上每次切回前台都要顿一下。
         //
         // 扫不动就整个对账都不做。下面第二步是拿「磁盘上没有」当删除依据的，
         // 而扫失败和扫出空目录长得一模一样——混为一谈的话，一次读不到 Media
         // 就等于把整个图库连同封面一起清空。
-        guard let onDisk = await Task.detached(priority: .utility) { Self.scanMedia() }.value
-        else { return (0, 0) }
+        let onDisk: [String: Bool]
+        do {
+            onDisk = try await Task.detached(priority: .utility) { try Self.scanMedia() }.value
+        } catch {
+            operationError = "扫描媒体库失败：\(error.localizedDescription)"
+            return (0, 0)
+        }
 
         // 磁盘刚被人动过，之前记住的「这个目录里有哪些名字」不作数了
         forgetClaimedNames()
@@ -57,7 +66,7 @@ extension LibraryStore {
         //
         // 记录本身不存内容，文件没了这条记录就是个打不开的空壳，留着只会
         // 在列表里显示成一块灰。所以跟着删。
-        let removed = removeAssets(notIn: Set(onDisk.keys.map { $0.lowercased() }))
+        let removed = removeAssets(notIn: Set(onDisk.keys.map { $0.lowercased() }), scanned: scanned)
 
         // 顺手把没人认领的封面清了。摘记录时已经删过对应的那张，这里是兜底：
         // 早先的版本、以及删分组/删目录那几条路都可能漏下几张。
@@ -107,20 +116,23 @@ extension LibraryStore {
 
     /// Media 下所有能认的媒体文件，key 是相对 Media 的路径。
     ///
-    /// 返回 nil 表示这次根本没扫成（目录不在、打不开），和「扫完了，一个
-    /// 文件都没有」是两回事：后者是删记录的依据，前者不是。
-    nonisolated private static func scanMedia() -> [String: Bool]? {
+    /// 任何目录读取失败都终止本轮扫描，不用不完整快照删除记录。
+    nonisolated private static func scanMedia() throws -> [String: Bool] {
         let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: Paths.media.path, isDirectory: &isDir), isDir.boolValue,
-              let walker = fm.enumerator(at: Paths.media,
+        var scanError: Error?
+        guard let walker = fm.enumerator(at: Paths.media,
                                          includingPropertiesForKeys: [.isRegularFileKey],
-                                         options: [.skipsHiddenFiles]) else { return nil }
+                                         options: [.skipsHiddenFiles], errorHandler: { _, error in
+            scanError = error
+            return false
+        }) else { throw CocoaError(.fileReadUnknown) }
 
         let rootParts = Paths.media.standardizedFileURL.pathComponents
         var out: [String: Bool] = [:]
 
         for case let url as URL in walker {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
             let name = url.lastPathComponent
             let isVideo = MediaFormats.isVideo(fileName: name)
             guard isVideo || MediaFormats.isImage(fileName: name) else { continue }
@@ -130,6 +142,7 @@ extension LibraryStore {
                   Array(parts.prefix(rootParts.count)) == rootParts else { continue }
             out[parts.dropFirst(rootParts.count).joined(separator: "/")] = isVideo
         }
+        if let scanError { throw scanError }
         return out
     }
 
@@ -185,11 +198,14 @@ extension LibraryStore {
         let name = (path as NSString).lastPathComponent
 
         if MediaFormats.isVideo(fileName: name) {
-            // 从电脑往共享目录拷东西的时候，很可能撞上还没拷完的文件。
-            // 半个 mp4 连时长都读不出来，收进去就成了一条永远显示「不支持」
-            // 的记录。读不出来就先放着，下次回到前台再试。
-            let info = await VideoProbe.inspect(url)
-            guard info.duration > 0 || info.width > 0 else { return false }
+            // 完整媒体用 FFmpeg 探测，失败保留原文件并报告，不生成空元信息记录。
+            let info: VideoProbe.Info
+            do { info = try await VideoProbe.inspect(url) }
+            catch {
+                operationError = "无法导入「\(name)」：\(error.localizedDescription)"
+                return false
+            }
+            guard FileManager.default.fileExists(atPath: url.path) else { return false }
 
             // 分两步写。挤成一行的话 try? 和 as? 会叠出两层可选，
             // 外面那层 ?? 只剥掉一层，剩下的又要在用的地方再兜一次底。

@@ -39,6 +39,7 @@ struct HTTPResponse {
     var status: Int = 200
     var headers: [String: String] = [:]
     var body: Data = Data()
+    var fileBody: HTTPFileBody?
 
     static func html(_ string: String) -> HTTPResponse {
         HTTPResponse(status: 200,
@@ -78,70 +79,56 @@ struct HTTPResponse {
                      body: data)
     }
 
-    /// 发磁盘上的一个文件，支持 Range。
-    ///
-    /// 视频必须支持 Range：不支持的话浏览器拖不动进度条，而且会把几百 MB
-    /// 整个塞进一个响应里发出去。每次最多回 chunkCap，剩下的等浏览器再来要。
+    /// 普通请求发送完整文件，Range 请求发送指定区间；发送层负责逐块读取。
     static func file(_ url: URL, type: String, range: String?) -> HTTPResponse {
-        let chunkCap = 4 * 1024 * 1024
-
-        guard let total = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil,
-              total > 0,
-              let handle = try? FileHandle(forReadingFrom: url) else {
-            return .notFound
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            let total = try handle.seekToEnd()
+            guard total <= UInt64(Int.max) else { throw CocoaError(.fileReadTooLarge) }
+            let size = Int(total)
+            var start = 0
+            var length = size
+            var status = 200
+            var headers = ["Content-Type": type, "Accept-Ranges": "bytes",
+                           "Cache-Control": "public, max-age=31536000"]
+            if let range {
+                guard let parsed = parseByteRange(range, total: size) else {
+                    try handle.close()
+                    return HTTPResponse(status: 416, headers: ["Content-Range": "bytes */\(size)"])
+                }
+                start = parsed.lowerBound
+                length = parsed.upperBound - start + 1
+                status = 206
+                headers["Content-Range"] = "bytes \(start)-\(parsed.upperBound)/\(size)"
+            }
+            try handle.seek(toOffset: UInt64(start))
+            return HTTPResponse(status: status, headers: headers,
+                                fileBody: HTTPFileBody(handle: handle, length: length))
+        } catch {
+            return .error("无法读取文件：\(error.localizedDescription)", status: 500)
         }
-        defer { try? handle.close() }
-
-        var start = 0
-        var end = total - 1
-        var partial = false
-
-        if let raw = range, let parsed = parseByteRange(raw, total: total) {
-            start = parsed.lowerBound
-            end = parsed.upperBound
-            partial = true
-        }
-        end = min(end, start + chunkCap - 1)
-
-        guard start <= end else {
-            return HTTPResponse(status: 416,
-                                headers: ["Content-Range": "bytes */\(total)"],
-                                body: Data())
-        }
-
-        try? handle.seek(toOffset: UInt64(start))
-        let data = (try? handle.read(upToCount: end - start + 1)) ?? Data()
-
-        var headers = [
-            "Content-Type": type,
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=31536000"
-        ]
-        if partial || end < total - 1 {
-            headers["Content-Range"] = "bytes \(start)-\(start + data.count - 1)/\(total)"
-            return HTTPResponse(status: 206, headers: headers, body: data)
-        }
-        return HTTPResponse(status: 200, headers: headers, body: data)
     }
 
-    /// 只认最常见的 "bytes=start-end" / "bytes=start-" / "bytes=-suffix"
+    /// 支持单个闭区间、开放区间以及尾部区间。无效范围明确返回 416。
     private static func parseByteRange(_ raw: String, total: Int) -> ClosedRange<Int>? {
-        guard total > 0 else { return nil }
-        let spec = raw.replacingOccurrences(of: "bytes=", with: "").trimmingCharacters(in: .whitespaces)
-        guard !spec.contains(","), let dash = spec.firstIndex(of: "-") else { return nil }
-
-        let headText = String(spec[spec.startIndex..<dash])
-        let tailText = String(spec[spec.index(after: dash)...])
-
-        if headText.isEmpty {
-            // bytes=-N：最后 N 个字节
-            guard let suffix = Int(tailText), suffix > 0 else { return nil }
-            let start = max(0, total - suffix)
-            return start...(total - 1)
+        guard total > 0, raw.hasPrefix("bytes=") else { return nil }
+        let parts = raw.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        func number(_ text: Substring) -> Int? {
+            guard !text.isEmpty, text.allSatisfy({ $0 >= "0" && $0 <= "9" }) else { return nil }
+            return Int(text)
         }
-        guard let start = Int(headText), start >= 0, start < total else { return nil }
-        let end = Int(tailText).map { min($0, total - 1) } ?? (total - 1)
-        guard end >= start else { return nil }
+        if parts[0].isEmpty {
+            guard let suffix = number(parts[1]), suffix > 0 else { return nil }
+            return max(0, total - suffix)...(total - 1)
+        }
+        guard let start = number(parts[0]), start < total else { return nil }
+        let end: Int
+        if parts[1].isEmpty { end = total - 1 }
+        else {
+            guard let value = number(parts[1]), value >= start else { return nil }
+            end = min(value, total - 1)
+        }
         return start...end
     }
 
@@ -155,16 +142,19 @@ struct HTTPResponse {
         case 206: return "Partial Content"
         case 400: return "Bad Request"
         case 404: return "Not Found"
+        case 409: return "Conflict"
         case 413: return "Payload Too Large"
         case 416: return "Range Not Satisfiable"
+        case 422: return "Unprocessable Content"
         case 500: return "Internal Server Error"
+        case 507: return "Insufficient Storage"
         default:  return "OK"
         }
     }
 
     func serialized(keepAlive: Bool) -> Data {
         var head = "HTTP/1.1 \(status) \(statusText)\r\n"
-        head += "Content-Length: \(body.count)\r\n"
+        head += "Content-Length: \(fileBody?.length ?? body.count)\r\n"
         head += "Connection: \(keepAlive ? "keep-alive" : "close")\r\n"
         for (k, v) in headers where k.lowercased() != "content-length" {
             head += "\(k): \(v)\r\n"

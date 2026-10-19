@@ -1,0 +1,22 @@
+"""Compile and run regression tests against the production Foundation components."""
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+root = Path(__file__).resolve().parents[2]
+compiler = shutil.which('swiftc')
+if compiler is None:
+    raise SystemExit('Swift compiler required. Run on macOS with Xcode installed.')
+sources = [
+    'Photo/Server/HTTPTypes.swift',
+    'Photo/Server/HTTPFileBody.swift',
+    'Photo/Server/MultipartStream.swift',
+    'Photo/Models/SnapshotWriter.swift',
+    'Tools/Checks/CoreRegressionTests.swift',
+]
+with tempfile.TemporaryDirectory(prefix='multimedia-tests-') as output:
+    binary = Path(output) / 'core-tests'
+    subprocess.run([compiler, '-swift-version', '5', '-parse-as-library',
+                    *[str(root / source) for source in sources], '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)

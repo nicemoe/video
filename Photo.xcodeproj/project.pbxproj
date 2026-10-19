@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		1A0000000000000000000020 /* KSPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0000000000000000000022 /* KSPlayer */; };
+		1A0000000000000000000023 /* FFmpegKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0000000000000000000025 /* FFmpegKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +26,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A0000000000000000000020 /* KSPlayer in Frameworks */,
+				1A0000000000000000000023 /* FFmpegKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -77,6 +79,7 @@
 			name = Photo;
 			packageProductDependencies = (
 				1A0000000000000000000022 /* KSPlayer */,
+				1A0000000000000000000025 /* FFmpegKit */,
 			);
 			productName = Photo;
 			productReference = 1A0000000000000000000005 /* Photo.app */;
@@ -110,6 +113,7 @@
 			preferredProjectObjectVersion = 77;
 			packageReferences = (
 				1A0000000000000000000021 /* XCRemoteSwiftPackageReference "KSPlayer" */,
+				1A0000000000000000000024 /* XCRemoteSwiftPackageReference "FFmpegKit" */,
 			);
 			productRefGroup = 1A0000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -252,7 +256,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = cn.nicemoe.box;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.nicemoe.video;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -276,7 +280,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = cn.nicemoe.box;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.nicemoe.video;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -316,6 +320,11 @@
 				minimumVersion = 2.3.4;
 			};
 		};
+		1A0000000000000000000024 /* XCRemoteSwiftPackageReference "FFmpegKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kingslay/FFmpegKit.git";
+			requirement = {kind = upToNextMajorVersion; minimumVersion = 6.1.3; };
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -323,6 +332,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 1A0000000000000000000021 /* XCRemoteSwiftPackageReference "KSPlayer" */;
 			productName = KSPlayer;
+		};
+		1A0000000000000000000025 /* FFmpegKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A0000000000000000000024 /* XCRemoteSwiftPackageReference "FFmpegKit" */;
+			productName = FFmpegKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

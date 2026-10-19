@@ -208,7 +208,9 @@ final class WiFiService {
             guard store.folder(id) != nil else { return .error("目录不存在", status: 404) }
             guard store.group(groupID) != nil else { return .error("目标分组不存在", status: 404) }
             // parentId 省略就是挂到分组根下
-            store.moveFolder(id, toGroup: groupID, parent: request.uuid("parentId"))
+            guard store.moveFolder(id, toGroup: groupID, parent: request.uuid("parentId")) else {
+                return .error("移动失败，原目录已保留", status: 409)
+            }
             note("网页移动了一个目录")
             return .ok()
 
@@ -268,7 +270,8 @@ final class WiFiService {
                 // 下次启动对账会把它收回来——磁盘才是真相，索引丢了能重建。
                 store.scheduleSaveFromServer()
             }
-            return .ok(["saved": ok ? 1 : 0, "skipped": ok ? 0 : 1])
+            guard ok else { return .error("文件导入失败，请检查文件格式和剩余空间", status: 422) }
+            return .ok(["saved": 1, "skipped": 0])
 
         case ("POST", "/api/upload"):
             guard let destination = destination(from: request) else {
@@ -287,9 +290,14 @@ final class WiFiService {
                     .appendingPathComponent("mp-\(UUID().uuidString)", isDirectory: true)
                 defer { try? FileManager.default.removeItem(at: workDir) }
 
-                let parts = await Task.detached(priority: .userInitiated) {
-                    MultipartStream.parse(fileURL: bodyFile, boundary: boundary, into: workDir)
-                }.value
+                let parts: [MultipartStream.Part]
+                do {
+                    parts = try await Task.detached(priority: .userInitiated) {
+                        try MultipartStream.parse(fileURL: bodyFile, boundary: boundary, into: workDir)
+                    }.value
+                } catch {
+                    return .error("上传文件处理失败：\(error.localizedDescription)", status: 500)
+                }
 
                 for part in parts where part.fileName != nil && part.byteCount > 0 {
                     let name = part.fileName ?? ""

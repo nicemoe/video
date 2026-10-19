@@ -18,3 +18,13 @@ Packages/
 Pods/
 .spm/
 Tools/VideoConvert/build/
+
+# Local credentials and signing material
+*.dpapi
+*.p12
+*.p8
+*.mobileprovision
+.env
+.env.*
+!.env.example
+__pycache__/

@@ -202,6 +202,7 @@ private final class HTTPConnection {
     private var headerScanOffset = 0
     private var isHandling = false
     private var isClosed = false
+    private var outgoingFile: HTTPFileBody?
 
     /// 请求体落盘时用：一边收一边往这里写，收满 contentLength 就交给上层
     private var spillFile: URL?
@@ -264,23 +265,25 @@ private final class HTTPConnection {
 
         // 大请求体：边收边写盘，内存里只过一遍缓冲区
         if request.contentLength > Self.spillThreshold {
-            if spillHandle == nil { openSpill() }
-            guard let handle = spillHandle else {
-                send(.text("500 无法写入临时文件", status: 500), keepAlive: false)
-                return
+            if spillHandle == nil {
+                do { try openSpill() }
+                catch { failUpload(error); return }
             }
+            guard let handle = spillHandle else { return }
             let need = request.contentLength - spilled
             if need > 0, !buffer.isEmpty {
                 let take = min(need, buffer.count)
                 // prefix / removeFirst 按元素个数算，与 startIndex 无关，这里是安全的
-                try? handle.write(contentsOf: Data(buffer.prefix(take)))
+                do { try handle.write(contentsOf: Data(buffer.prefix(take))) }
+                catch { failUpload(error); return }
                 buffer.removeFirst(take)
                 spilled += take
                 if buffer.isEmpty { buffer = Data() }
             }
             guard spilled >= request.contentLength else { return }   // 还没收完，等下一批
 
-            try? handle.close()
+            do { try handle.close() }
+            catch { failUpload(error); return }
             spillHandle = nil
             let file = spillFile
             spillFile = nil
@@ -303,13 +306,27 @@ private final class HTTPConnection {
         dispatch(request, body: body, bodyFile: nil)
     }
 
-    private func openSpill() {
+    private func openSpill() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("upload-\(UUID().uuidString).bin")
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        spillHandle = try? FileHandle(forWritingTo: url)
-        spillFile = spillHandle == nil ? nil : url
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        spillFile = url
+        spillHandle = try FileHandle(forWritingTo: url)
         spilled = 0
+    }
+
+    private func failUpload(_ error: Error) {
+        isHandling = true
+        pending = nil
+        buffer.removeAll()
+        try? spillHandle?.close() // 失败后的资源释放，不再接受此文件。
+        spillHandle = nil
+        if let spillFile { try? FileManager.default.removeItem(at: spillFile) }
+        spillFile = nil
+        spilled = 0
+        send(.error("上传写入失败：\(error.localizedDescription)", status: 507), keepAlive: false)
     }
 
     /// 解析出 header 后把它从缓冲区里摘掉，返回是否成功
@@ -405,16 +422,33 @@ private final class HTTPConnection {
 
     private func send(_ response: HTTPResponse, keepAlive: Bool) {
         guard !isClosed else { return }
-        let data = response.serialized(keepAlive: keepAlive)
-        connection.send(content: data, completion: .contentProcessed { [weak self] _ in
-            guard let self else { return }
-            self.isHandling = false
-            if keepAlive {
-                self.drain()
-            } else {
-                self.close()
-            }
+        outgoingFile = response.fileBody
+        connection.send(content: response.serialized(keepAlive: keepAlive),
+                        completion: .contentProcessed { [weak self] error in
+            guard let self, !self.isClosed else { return }
+            guard error == nil else { self.close(); return }
+            self.sendFileChunk(keepAlive: keepAlive)
         })
+    }
+
+    private func sendFileChunk(keepAlive: Bool) {
+        guard !isClosed else { return }
+        do {
+            if let file = outgoingFile, let chunk = try file.readChunk() {
+                connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
+                    guard let self, !self.isClosed else { return }
+                    guard error == nil else { self.close(); return }
+                    self.sendFileChunk(keepAlive: keepAlive)
+                })
+                return
+            }
+            outgoingFile = nil
+            isHandling = false
+            if keepAlive { drain() } else { close() }
+        } catch {
+            // 响应头已发出，读盘失败只能中断连接，不能把残缺正文当成成功。
+            close()
+        }
     }
 
     /// 可能从主线程（stop()）调用，所以统一回到连接自己的队列上执行，
@@ -424,6 +458,7 @@ private final class HTTPConnection {
             guard !isClosed else { return }
             isClosed = true
             buffer.removeAll()
+            outgoingFile = nil
             pending = nil
             // 连接中途断了：收了一半的请求体没人要了，别留在磁盘上
             try? spillHandle?.close()

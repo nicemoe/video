@@ -1,8 +1,8 @@
-# Photo · 分组相册
+# 多媒体 · 图片与视频管理
 
-一个 iOS 相册 App：**分组 → 目录 → 图片** 三层结构，支持从系统相册导入，也支持在同一 WiFi 下用浏览器上传和管理。
+一个 iOS 图片与视频管理 App：**分组 → 目录 → 图片 / 视频** 三层结构，支持从系统相册导入，也支持在同一 WiFi 下用浏览器上传和管理。
 
-原生 SwiftUI，零第三方依赖。
+原生 SwiftUI，视频播放支持 AVFoundation 和 KSPlayer / FFmpeg 解码。
 
 ---
 
@@ -13,7 +13,7 @@ open Photo.xcodeproj
 ```
 
 1. 用 **Xcode 16 及以上**打开（项目用了 Xcode 16 的「文件系统同步分组」，新增文件不用手动加进工程）。
-2. 选中 `Photo` target → **Signing & Capabilities** → 填自己的 Team（Bundle Identifier 已是 `cn.nicemoe.box`，换成你自己的也可以）。
+2. 选中 `Photo` target → **Signing & Capabilities** → 填自己的 Team（Bundle Identifier 已是 `cn.nicemoe.video`，换成你自己的也可以）。
 3. 选真机运行。
 
 > WiFi 上传必须用**真机**：模拟器和电脑共用网卡，地址不是手机的局域网地址。

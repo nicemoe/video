@@ -1,4 +1,4 @@
-name: 构建 IPA
+name: 多媒体 · 构建 IPA
 
 # 推 main/master、打 v* 标签、提 PR 或手动触发时，都会跑一次构建。
 # 产出的是「未签名 IPA」——不需要配置任何 Apple 证书就能跑通，
@@ -29,6 +29,7 @@ jobs:
       PROJECT: Photo.xcodeproj
       SCHEME: Photo
       APP_NAME: Photo
+      ARTIFACT_NAME: Multimedia
 
     steps:
       - name: 检出代码
@@ -60,6 +61,9 @@ jobs:
           path: .spm
           key: spm-${{ runner.os }}-${{ hashFiles('Photo.xcodeproj/project.pbxproj') }}
           restore-keys: spm-${{ runner.os }}-
+
+      - name: 核心回归测试
+        run: python3 Tools/Checks/run_core_tests.py
 
       - name: 解析 Swift 包依赖
         run: |
@@ -108,21 +112,21 @@ jobs:
           work="$RUNNER_TEMP/ipa"
           mkdir -p "$work/Payload"
           cp -R "$app" "$work/Payload/"
-          ( cd "$work" && zip -qry "$RUNNER_TEMP/$APP_NAME-unsigned.ipa" Payload )
+          ( cd "$work" && zip -qry "$RUNNER_TEMP/$ARTIFACT_NAME-unsigned.ipa" Payload )
 
-          size=$(du -h "$RUNNER_TEMP/$APP_NAME-unsigned.ipa" | cut -f1)
-          echo "ipa=$RUNNER_TEMP/$APP_NAME-unsigned.ipa" >> "$GITHUB_OUTPUT"
+          size=$(du -h "$RUNNER_TEMP/$ARTIFACT_NAME-unsigned.ipa" | cut -f1)
+          echo "ipa=$RUNNER_TEMP/$ARTIFACT_NAME-unsigned.ipa" >> "$GITHUB_OUTPUT"
           echo "size=$size" >> "$GITHUB_OUTPUT"
           # 变量后面紧跟中文标点时必须加大括号：runner 的 bash 会把中文字节
           # 当成变量名的一部分，配合 set -u 会报 "size?: unbound variable"
           echo "### 构建完成 :package:" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 文件：\`${APP_NAME}-unsigned.ipa\`（${size}，未签名）" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 文件：\`${ARTIFACT_NAME}-unsigned.ipa\`（${size}，未签名）" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build 号：${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-unsigned-ipa-${{ github.run_number }}
+          name: ${{ env.ARTIFACT_NAME }}-unsigned-ipa-${{ github.run_number }}
           path: ${{ steps.package.outputs.ipa }}
           retention-days: 30
           if-no-files-found: error

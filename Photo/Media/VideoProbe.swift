@@ -1,52 +1,77 @@
 import AVFoundation
 import UIKit
+import KSPlayer
+import Libavformat
+import Libavutil
 
-/// 视频的元信息与首帧。
-///
-/// 尺寸、时长、封面都得从文件里现算，不像图片能从头部几百字节读出来，
-/// 所以这里全部走异步，别在主线程上等。
 enum VideoProbe {
-
     struct Info {
-        var width = 0
-        var height = 0
-        var duration: Double = 0
+        var width: Int
+        var height: Int
+        var duration: Double
     }
 
-    static func inspect(_ url: URL) async -> Info {
+    enum ProbeError: LocalizedError {
+        case noVideo, noFrame, ffmpeg(Int32)
+        var errorDescription: String? {
+            switch self {
+            case .noVideo: return "文件中没有可读取的视频轨道"
+            case .noFrame: return "无法生成视频封面"
+            case .ffmpeg(let code): return "视频探测失败（\(code)）"
+            }
+        }
+    }
+
+    /// 元信息统一由 FFmpeg 读取；上传临时文件没有扩展名也按内容识别。
+    static func inspect(_ url: URL) async throws -> Info {
+        var context: UnsafeMutablePointer<AVFormatContext>?
+        defer { avformat_close_input(&context) }
+        let opened = avformat_open_input(&context, url.path, nil, nil)
+        guard opened >= 0 else { throw ProbeError.ffmpeg(opened) }
+        guard let context else { throw ProbeError.noVideo }
+        let found = avformat_find_stream_info(context, nil)
+        guard found >= 0 else { throw ProbeError.ffmpeg(found) }
+        let index = av_find_best_stream(context, AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0)
+        guard index >= 0, let stream = context.pointee.streams[Int(index)],
+              let parameters = stream.pointee.codecpar else { throw ProbeError.noVideo }
+        let rawDuration = context.pointee.duration
+        let seconds = rawDuration > 0 ? Double(rawDuration) / Double(AV_TIME_BASE) : 0
+        var width = Int(parameters.pointee.width)
+        var height = Int(parameters.pointee.height)
+        guard width > 0, height > 0 else { throw ProbeError.noVideo }
+        let codec = parameters.pointee
+        if let sideData = codec.coded_side_data {
+            for i in 0..<Int(codec.nb_coded_side_data) {
+                let item = sideData[i]
+                if item.type == AV_PKT_DATA_DISPLAYMATRIX, item.size >= 9 * MemoryLayout<Int32>.size {
+                    let angle = item.data.withMemoryRebound(to: Int32.self, capacity: 9) {
+                        av_display_rotation_get($0)
+                    }
+                    if angle.isFinite, abs(Int(angle.rounded())) % 180 == 90 { swap(&width, &height) }
+                }
+            }
+        }
+        return Info(width: width, height: height, duration: seconds)
+    }
+
+    static func poster(for url: URL, maxPixel: Int, decoder: DecoderChoice) async throws -> UIImage {
+        let software = decoder == .software
+            || (decoder == .auto && MediaFormats.prefersSoftware(fileName: url.lastPathComponent))
+        if software {
+            let thumbnails = try await ThumbnailController(thumbnailCount: 1)
+                .generateThumbnail(for: url, thumbWidth: Int32(maxPixel))
+            guard let image = thumbnails.first?.image else { throw ProbeError.noFrame }
+            return image
+        }
         let asset = AVURLAsset(url: url)
-        var info = Info()
-
-        if let seconds = try? await asset.load(.duration).seconds, seconds.isFinite {
-            info.duration = max(0, seconds)
-        }
-
-        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-              let size = try? await track.load(.naturalSize),
-              let transform = try? await track.load(.preferredTransform) else {
-            return info
-        }
-
-        // naturalSize 是解码后的尺寸，竖着拍的视频要靠 preferredTransform
-        // 转过来才是观感上的宽高，否则列表里会全都躺着
-        let oriented = size.applying(transform)
-        info.width = Int(abs(oriented.width).rounded())
-        info.height = Int(abs(oriented.height).rounded())
-        return info
-    }
-
-    /// 取一帧当封面
-    static func poster(for url: URL, maxPixel: Int) async -> UIImage? {
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-        generator.appliesPreferredTrackTransform = true   // 竖屏视频不能躺着
+        let duration = try await asset.load(.duration).seconds
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
-        // 允许前后各挪一点，否则某些视频的关键帧不在 0 秒会直接失败
         generator.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
         generator.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 600)
-
-        // 不取第 0 帧：不少视频开头是黑场或渐入，抽出来是一片黑
-        let at = CMTime(seconds: 0.5, preferredTimescale: 600)
-        guard let cg = try? await generator.image(at: at).image else { return nil }
+        let time = duration.isFinite && duration > 0 ? min(0.5, duration / 2) : 0
+        let cg = try await generator.image(at: CMTime(seconds: time, preferredTimescale: 600)).image
         return UIImage(cgImage: cg)
     }
 }

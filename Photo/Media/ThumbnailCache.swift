@@ -1,5 +1,6 @@
 import UIKit
 import ImageIO
+import os
 
 /// 同时最多让几张图在解码。
 ///
@@ -38,7 +39,8 @@ final class ThumbnailCache: @unchecked Sendable {
     private let cache: NSCache<NSString, UIImage> = {
         let c = NSCache<NSString, UIImage>()
         c.countLimit = 600
-        c.totalCostLimit = 220 * 1024 * 1024   // 约 220MB 像素预算
+        // 留出播放器解码和原图预览所需内存，按设备内存缩放，上限 128 MB。
+        c.totalCostLimit = Int(min(ProcessInfo.processInfo.physicalMemory / 32, 128 * 1024 * 1024))
         return c
     }()
 
@@ -55,7 +57,18 @@ final class ThumbnailCache: @unchecked Sendable {
     /// 下次启动自然会再试一次。
     private var hopelessPosters = Set<UUID>()
 
-    private init() {}
+    private static let logger = Logger(subsystem: "cn.nicemoe.video", category: "thumbnails")
+    private var memoryObserver: NSObjectProtocol?
+
+    private init() {
+        memoryObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
+        ) { [weak self] _ in self?.removeAll() }
+    }
+
+    deinit {
+        if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) }
+    }
 
     private func key(_ id: UUID, _ maxPixel: Int) -> String { "\(id.uuidString)@\(maxPixel)" }
 
@@ -202,9 +215,12 @@ final class ThumbnailCache: @unchecked Sendable {
         guard !hopeless else { return nil }
 
         let posterURL = LibraryStore.posterURL(for: asset.id)
-        guard let full = await VideoProbe.poster(for: LibraryStore.fileURL(for: asset),
-                                                 maxPixel: Self.posterSide) else {
-            // 记一笔，这轮别再来了
+        let full: UIImage
+        do {
+            full = try await VideoProbe.poster(for: LibraryStore.fileURL(for: asset),
+                                               maxPixel: Self.posterSide, decoder: asset.decoder)
+        } catch {
+            Self.logger.error("视频封面生成失败：\(error.localizedDescription, privacy: .public)")
             lock.lock()
             hopelessPosters.insert(asset.id)
             lock.unlock()
@@ -275,7 +291,7 @@ final class ThumbnailCache: @unchecked Sendable {
         // 键按候选算，不按最后用上的那几张。这样某个坏文件今天抽不出、
         // 明天换好了能抽出来，键是同一个——真要它重拼，靠的是候选变了
         // （目录里进了新东西），那才是封面该换的时候。
-        let key = "collage@\(Int(side)):" + assets.map(\.id.uuidString).joined(separator: ",")
+        let key = "collage@\(side)@\(gap)@\(scale):" + assets.map(\.id.uuidString).joined(separator: ",")
         if let hit = cache.object(forKey: key as NSString) { return hit }
 
         // 每格实际占多大就要多大。四宫格一格只占一半，按整张卡的分辨率去解

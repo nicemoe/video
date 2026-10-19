@@ -280,7 +280,10 @@ struct MoveFolderSheet: View {
                 VStack(spacing: 8) {
                     ForEach(destinations) { item in
                         Button {
-                            store.moveFolder(folder.id, toGroup: item.groupID, parent: item.folderID)
+                            guard store.moveFolder(folder.id, toGroup: item.groupID, parent: item.folderID) else {
+                                dismiss()
+                                return
+                            }
                             onMoved()
                             dismiss()
                         } label: {
