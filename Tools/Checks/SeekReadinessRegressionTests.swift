@@ -14,6 +14,7 @@ func expect(_ condition: Bool, _ message: String) {
 }
 
 open class TestOptions {
+    let seekDiagnostics = SeekDiagnostics()
     var preferredForwardBufferDuration = 3.0
     var maxBufferDuration = 30.0
     var isSeekReadyOnFrames = true

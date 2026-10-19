@@ -127,6 +127,9 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
         }
         lastPacketBytes += packet.size
         let decoder = decoderMap.value(for: packet.assetTrack.trackID, default: makeDecode(assetTrack: packet.assetTrack))
+        let diagnosticToken = options.seekDiagnostics.mediaToken
+        options.seekDiagnostics.mark("\(mediaType.rawValue)_decode_start", token: diagnosticToken,
+            detail: "decoder=\(type(of: decoder)) packet=\(packet.seconds) key=\(packet.isKeyFrame)")
 //        var startTime = CACurrentMediaTime()
         decoder.decodeFrame(from: packet, discardBefore: seekTime) { [weak self] result in
             guard let self else {
@@ -151,6 +154,8 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
                                   frame.timebase.cmtime(for: timestamp).seconds >= self.seekTime else { return false }
                             self.seekTime = 0
                         }
+                        self.options.seekDiagnostics.mark("\(self.mediaType.rawValue)_queue_accept", token: diagnosticToken,
+                            detail: "pts=\(frame.cmtime.seconds)")
                         return true
                     })
                     self.outputRenderQueue.fps = packet.assetTrack.nominalFrameRate

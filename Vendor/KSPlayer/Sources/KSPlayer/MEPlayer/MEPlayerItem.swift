@@ -484,6 +484,9 @@ extension MEPlayerItem {
                 let seekMax = increase < 0 ? timeStamp - increase - 2 : Int64.max
                 // can not seek to key frame
                 let seekStartTime = CACurrentMediaTime()
+                let diagnosticToken = options.seekDiagnostics.token
+                options.seekDiagnostics.mark("demux_start", token: diagnosticToken,
+                    detail: "target=\(seekToTime) flags=\(seekFlags)")
                 var result = avformat_seek_file(formatCtx, -1, seekMin, timeStamp, seekMax, seekFlags)
 //                var result = av_seek_frame(formatCtx, -1, timeStamp, seekFlags)
                 // When seeking before the beginning of the file, and seeking fails,
@@ -504,6 +507,7 @@ extension MEPlayerItem {
                 }
                 isSeek = true
                 allPlayerItemTracks.forEach { $0.seek(time: seekToTime) }
+                options.seekDiagnostics.demuxCompleted(token: diagnosticToken, result: result)
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.seekingCompletionHandler?(result >= 0)
@@ -703,6 +707,10 @@ extension MEPlayerItem: CodecCapacityDelegate {
         // Such a sample belongs to neither the old nor the new ready timeline.
         guard state != .seeking else { return }
         let loadingState = options.playable(capacitys: videoAudioTracks, isFirst: isFirst, isSeek: isSeek)
+        options.seekDiagnostics.sample("buffers", token: options.seekDiagnostics.mediaToken,
+            detail: "seek=\(isSeek) playable=\(loadingState.isPlayable) " + videoAudioTracks.map {
+                "\($0.mediaType.rawValue):frames=\($0.frameCount),packets=\($0.packetCount)"
+            }.joined(separator: " "))
         delegate?.sourceDidChange(loadingState: loadingState)
         if loadingState.isPlayable {
             isFirst = false
@@ -797,6 +805,9 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
         runOnMainThread {
             self.audioClock.time = time
             self.audioClock.position = position
+            let trace = self.options.seekDiagnostics
+            trace.mark("first_audio_output", token: trace.mediaToken, detail: "pts=\(time.seconds)")
+            trace.sample("audio_clock", token: trace.mediaToken, detail: "pts=\(time.seconds)")
         }
     }
 
@@ -808,6 +819,9 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
         let predicate: ((VideoVTBFrame, Int) -> Bool)? = force ? nil : { [weak self] frame, count -> Bool in
             guard let self else { return true }
             (self.dynamicInfo.audioVideoSyncDiff, type) = self.options.videoClockSync(main: self.mainClock(), nextVideoTime: frame.seconds, fps: Double(frame.fps), frameCount: count)
+            let trace = self.options.seekDiagnostics
+            trace.sample("video_clock", token: trace.mediaToken,
+                detail: "pts=\(frame.seconds) main=\(self.mainClock().time.seconds) diff=\(self.dynamicInfo.audioVideoSyncDiff) action=\(type) frames=\(count)")
             return type != .remain
         }
         let frame = videoTrack.getOutputRender(where: predicate)

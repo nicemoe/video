@@ -48,7 +48,7 @@ def main():
         path = Path(directory) / 'Readiness.swift'
         binary = Path(directory) / 'readiness'
         path.write_text(source)
-        command = [compiler, '-swift-version', '5', '-parse-as-library', str(path), '-o', str(binary)]
+        command = [compiler, '-swift-version', '5', '-parse-as-library', str(path), str(BASE / 'MEPlayer/SeekDiagnostics.swift'), '-o', str(binary)]
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True)
         # Remove only the new seek invalidation. The same test must reject it.

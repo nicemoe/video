@@ -30,5 +30,14 @@ with tempfile.TemporaryDirectory(prefix='multimedia-tests-') as output:
                     *[str(root / source) for source in seek_sources], '-o', str(seek_binary)], check=True)
     subprocess.run([str(seek_binary)], check=True)
 
+    diagnostic_binary = Path(output) / 'seek-diagnostic-tests'
+    diagnostic_sources = [
+        'Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/SeekDiagnostics.swift',
+        'Tools/Checks/SeekDiagnosticsTests.swift',
+    ]
+    subprocess.run([compiler, '-swift-version', '5', '-parse-as-library',
+                    *[str(root / source) for source in diagnostic_sources], '-o', str(diagnostic_binary)], check=True)
+    subprocess.run([str(diagnostic_binary)], check=True)
+
 from run_seek_readiness_tests import main as check_seek_readiness
 check_seek_readiness()

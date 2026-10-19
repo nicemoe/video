@@ -175,6 +175,8 @@ extension MetalPlayView {
             }
             pixelBuffer = frame.corePixelBuffer
             guard let pixelBuffer else {
+                let trace = options.seekDiagnostics
+                trace.mark("video_missing_pixels", token: trace.mediaToken, detail: "pts=\(frame.cmtime.seconds)")
                 return
             }
             isDovi = frame.isDovi
@@ -217,6 +219,10 @@ extension MetalPlayView {
                 #endif
                 metalView.draw(pixelBuffer: pixelBuffer, display: options.display, size: size)
             }
+            let trace = options.seekDiagnostics
+            trace.mark("first_video_submit", token: trace.mediaToken, detail: "pts=\(cmtime.seconds) forced=\(force)")
+            trace.sample("video_submit", token: trace.mediaToken,
+                detail: "pts=\(cmtime.seconds) displayLayer=\(!displayView.isHidden) status=\(displayLayer.status.rawValue) accepts=\(displayLayer.isReadyForMoreMediaData) error=\(String(describing: displayLayer.error))")
             renderSource?.setVideo(time: cmtime, position: frame.position)
         }
     }

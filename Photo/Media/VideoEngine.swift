@@ -3,6 +3,7 @@ import AVFoundation
 import KSPlayer
 import VideoToolbox
 import Libavformat
+import Darwin
 
 /// 统一由 FFmpeg 解封装；硬件与软件解码通过实例配置明确选择。
 @MainActor
@@ -11,6 +12,7 @@ protocol VideoEngine: AnyObject {
     /// 渲染画面的视图。引擎自己建、自己管，外面只负责摆位置。
     var renderView: UIView { get }
 
+    var diagnosticReport: String { get }
     var duration: Double { get }
     var currentTime: Double { get }
     var volume: Float { get set }
@@ -93,6 +95,24 @@ final class FFmpegEngine: NSObject, VideoEngine {
     var onFinish: (() -> Void)?
     var onFailure: ((String) -> Void)?
 
+    var diagnosticReport: String {
+        var system = utsname()
+        uname(&system)
+        let machineSize = MemoryLayout.size(ofValue: system.machine)
+        let machine = withUnsafePointer(to: &system.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: machineSize) {
+                String(cString: $0)
+            }
+        }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let codec = player.tracks(mediaType: .video).compactMap { ($0 as? FFmpegAssetTrack)?.codecName }.joined(separator: ",")
+        return "多媒体播放诊断 version=\(version ?? "unknown") build=\(build ?? "unknown")\n"
+            + "device=\(machine) os=\(UIDevice.current.systemVersion) codec=\(codec) hardwareRequested=\(hardwareDecode)\n"
+            + "记录最近一次跳转的前 8 秒；video_submit 表示提交画面，不代表屏幕已完成显示。\n"
+            + options.seekDiagnostics.report()
+    }
+
     var renderView: UIView { container }
     var duration: Double { player.duration }
     var currentTime: Double { player.currentPlaybackTime }
@@ -171,6 +191,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
         guard ready, !stopped, !seeking, let target = pendingSeek else { return }
         pendingSeek = nil
         seeking = true
+        options.seekDiagnostics.begin(target: target.time, accurate: target.accurate)
         // 清理旧时间线的显示队列，但保留最后一帧，避免快进时黑闪。
         player.videoOutput?.displayLayer.flush()
         options.seekFlags = AVSEEK_FLAG_BACKWARD

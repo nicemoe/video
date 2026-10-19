@@ -158,6 +158,8 @@ private extension KSMEPlayer {
                 self.audioOutput.pause()
                 self.videoOutput?.pause()
             } else {
+                let trace = self.options.seekDiagnostics
+                trace.mark("outputs_resume", token: trace.mediaToken)
                 self.audioOutput.play()
                 self.videoOutput?.play()
             }
@@ -260,6 +262,9 @@ extension KSMEPlayer: MEPlayerDelegate {
             var progress = 100
             if loadingState.isPlayable {
                 if loadingState.isSeek {
+                    let trace = options.seekDiagnostics
+                    trace.mark("target_ready", token: trace.mediaToken,
+                        detail: "frames=\(loadingState.frameCount) packets=\(loadingState.packetCount)")
                     // Show the first target frame before audio starts; also update
                     // the picture when seeking while the user has paused playback.
                     videoOutput?.readNextFrame()
