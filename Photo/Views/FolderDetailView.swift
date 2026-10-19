@@ -432,9 +432,8 @@ struct FolderDetailView: View {
                     Text(verbatim: (asset.fileName as NSString).lastPathComponent)
                         .font(.caption)
                         .foregroundStyle(Theme.label)
-                        .lineLimit(2, reservesSpace: true)
-                        .truncationMode(.middle)
-                        .multilineTextAlignment(.leading)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
