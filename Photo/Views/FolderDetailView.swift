@@ -8,6 +8,8 @@ struct FolderDetailView: View {
 
     @Environment(LibraryStore.self) private var store
 
+    @AppStorage("library.showVideoFileNames") private var showVideoFileNames = false
+
     @State private var isSelecting = false
     @State private var selection: Set<UUID> = []
     @State private var viewerContext: ViewerContext?
@@ -146,6 +148,11 @@ struct FolderDetailView: View {
                                     withAnimation(.easeOut(duration: 0.18)) { isSelecting = true }
                                 } label: {
                                     Label("选择", systemImage: "checkmark.circle")
+                                }
+                            }
+                            if folder?.assets.contains(where: { $0.isVideo }) == true {
+                                Toggle(isOn: $showVideoFileNames) {
+                                    Label("显示文件名", systemImage: "textformat")
                                 }
                             }
                             if !children.isEmpty {
@@ -346,70 +353,82 @@ struct FolderDetailView: View {
                 viewerContext = ViewerContext(assets: list, index: index)
             }
         } label: {
-            AssetImage(asset: asset, maxPixel: 420)
-                // 尺寸跟着列宽走，不用量出来的 side ——
-                // 测量值一过时就会把整片格子挤出屏幕
-                .frame(maxWidth: .infinity)
-                .aspectRatio(1, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
-                .overlay {
-                    if isSelecting {
-                        RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                            .fill(Color.black.opacity(selected ? 0.25 : 0))
-                    }
-                }
-                // 视频角标放左下，选择标记在右下，两边不打架
-                .overlay(alignment: .bottomLeading) {
-                    if asset.isVideo {
-                        HStack(spacing: 3) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 8.5, weight: .bold))
-                            Text(asset.durationText)
-                                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                                .monospacedDigit()
+            VStack(alignment: .leading, spacing: 6) {
+                AssetImage(asset: asset, maxPixel: 420)
+                    // 尺寸跟着列宽走，不用量出来的 side ——
+                    // 测量值一过时就会把整片格子挤出屏幕
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(1, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                    .overlay {
+                        if isSelecting {
+                            RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                                .fill(Color.black.opacity(selected ? 0.25 : 0))
                         }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 3)
-                        .background(.black.opacity(0.45), in: Capsule())
-                        .padding(6)
                     }
-                }
-                // 看到一半的在底边留一根细条。一屏几十个视频，光看角标分不出
-                // 哪些看过——这根条就是「上次停在这儿」的唯一提示。
-                .overlay(alignment: .bottom) {
-                    if asset.watchedRatio > 0 {
-                        Capsule()
-                            .fill(.white.opacity(0.3))
-                            .frame(height: 2.5)
-                            .overlay(alignment: .leading) {
-                                Capsule()
-                                    .fill(Theme.accent)
-                                    .scaleEffect(x: asset.watchedRatio, anchor: .leading)
+                    // 视频角标放左下，选择标记在右下，两边不打架
+                    .overlay(alignment: .bottomLeading) {
+                        if asset.isVideo {
+                            HStack(spacing: 3) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                Text(asset.durationText)
+                                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                                    .monospacedDigit()
                             }
-                            .padding(.horizontal, 6)
-                            .padding(.bottom, 5)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .padding(6)
+                        }
                     }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    if isSelecting {
-                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.85))
-                            .background(
-                                Circle()
-                                    .fill(selected ? Theme.accent : Color.black.opacity(0.25))
-                                    .frame(width: 20, height: 20)
-                            )
-                            .padding(7)
+                    // 看到一半的在底边留一根细条。一屏几十个视频，光看角标分不出
+                    // 哪些看过——这根条就是「上次停在这儿」的唯一提示。
+                    .overlay(alignment: .bottom) {
+                        if asset.watchedRatio > 0 {
+                            Capsule()
+                                .fill(.white.opacity(0.3))
+                                .frame(height: 2.5)
+                                .overlay(alignment: .leading) {
+                                    Capsule()
+                                        .fill(Theme.accent)
+                                        .scaleEffect(x: asset.watchedRatio, anchor: .leading)
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.bottom, 5)
+                        }
                     }
+                    .overlay(alignment: .bottomTrailing) {
+                        if isSelecting {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.85))
+                                .background(
+                                    Circle()
+                                        .fill(selected ? Theme.accent : Color.black.opacity(0.25))
+                                        .frame(width: 20, height: 20)
+                                )
+                                .padding(7)
+                        }
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                            .strokeBorder(selected ? Theme.accent : .clear, lineWidth: 2.5)
+                    }
+                if showVideoFileNames && asset.isVideo {
+                    Text(verbatim: (asset.fileName as NSString).lastPathComponent)
+                        .font(.caption)
+                        .foregroundStyle(Theme.label)
+                        .lineLimit(2, reservesSpace: true)
+                        .truncationMode(.middle)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .overlay {
-                    RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                        .strokeBorder(selected ? Theme.accent : .clear, lineWidth: 2.5)
-                }
+            }
         }
         .buttonStyle(PressableCardStyle())
+        .frame(maxHeight: .infinity, alignment: .top)
         .contextMenu {
             if !isSelecting {
                 Button(role: .destructive) {
