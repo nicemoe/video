@@ -429,12 +429,7 @@ struct FolderDetailView: View {
                             .strokeBorder(selected ? Theme.accent : .clear, lineWidth: 2.5)
                     }
                 if showVideoFileNames && asset.isVideo {
-                    Text(verbatim: (asset.fileName as NSString).lastPathComponent)
-                        .font(.caption)
-                        .foregroundStyle(Theme.label)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ScrollingFileName(text: (asset.fileName as NSString).lastPathComponent)
                 }
             }
         }
