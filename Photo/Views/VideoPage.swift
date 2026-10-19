@@ -138,6 +138,7 @@ struct VideoPage: View {
     @State private var duration: Double = 0
     @State private var scrubbing = false
     @State private var rate: Float = 1
+    @AppStorage("video.accurateSeek") private var accurateSeek = false
 
     // 缩放，和图片那边一套参数
     @State private var scale: CGFloat = 1
@@ -513,6 +514,9 @@ struct VideoPage: View {
                     Label(choice.label, systemImage: decoderPolicy == choice ? "checkmark" : "")
                 }
             }
+            Section("进度定位") {
+                Toggle("精准定位（可能较慢）", isOn: $accurateSeek)
+            }
         } label: {
             Text(decoderPolicy.label)
                 .font(.system(size: 13, weight: .semibold))
@@ -611,7 +615,7 @@ struct VideoPage: View {
                     .onEnded { value in
                         guard duration > 0 else { return }
                         current = min(max(0, value.location.x / width), 1) * duration
-                        seek(to: current)    // 松手落到准确位置
+                        seek(to: current)    // 松手提交跳转
                         scrubbing = false
                         if isPlaying { engine?.play() }
                     }
@@ -696,7 +700,7 @@ struct VideoPage: View {
         let from = resumeAt ?? startAt
         if from > 0.5 {
             current = from
-            made.seek(to: from)
+            made.seek(to: from, accurate: true)
             // 只有「上次退出时存的位置」才提示。横竖屏转一下、切个解码器
             // 都不该弹这句，那两种人心里有数。
             if announceResume, resumeAt == nil {
@@ -785,9 +789,9 @@ struct VideoPage: View {
         isPlaying.toggle()
     }
 
-    /// 拖动只更新目标时间，松手才提交一次精确跳转。
+    /// 拖动只更新目标时间，松手按定位偏好提交一次跳转。
     private func seek(to seconds: Double) {
-        engine?.seek(to: seconds)
+        engine?.seek(to: seconds, accurate: accurateSeek)
     }
 
     private func setRate(_ value: Float) {
@@ -941,7 +945,7 @@ struct VideoPage: View {
 
         case .ended, .cancelled, .failed:
             if dragMode == .seek {
-                seek(to: current)   // 松手落到准确位置
+                seek(to: current)   // 松手提交跳转
                 scrubbing = false
                 if isPlaying { engine?.play() }
             }

@@ -19,8 +19,8 @@ protocol VideoEngine: AnyObject {
     func pause()
     func setRate(_ rate: Float)
 
-    /// 从前一个关键帧解码到目标位置；同一时刻只执行一个跳转。
-    func seek(to seconds: Double)
+    /// 快速定位从附近关键帧开始；精准定位继续解码到目标时间。同一时刻只执行一个跳转。
+    func seek(to seconds: Double, accurate: Bool)
 
     /// 适应（留黑边）还是填充（裁掉溢出的部分）
     func setFill(_ on: Bool)
@@ -86,7 +86,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
     private var fill = false
     private var stopped = false
     private var seeking = false
-    private var pendingSeek: Double?
+    private var pendingSeek: (time: Double, accurate: Bool)?
 
     var onProgress: ((Double) -> Void)?
     var onDuration: ((Double) -> Void)?
@@ -161,9 +161,9 @@ final class FFmpegEngine: NSObject, VideoEngine {
         player.playbackRate = value
     }
 
-    func seek(to seconds: Double) {
+    func seek(to seconds: Double, accurate: Bool) {
         guard seconds.isFinite, !stopped else { return }
-        pendingSeek = max(0, seconds)
+        pendingSeek = (max(0, seconds), accurate)
         performPendingSeek()
     }
 
@@ -174,7 +174,8 @@ final class FFmpegEngine: NSObject, VideoEngine {
         // 清理旧时间线的显示队列，但保留最后一帧，避免快进时黑闪。
         player.videoOutput?.displayLayer.flush()
         options.seekFlags = AVSEEK_FLAG_BACKWARD
-        player.seek(time: target) { [weak self] succeeded in
+        options.isAccurateSeek = target.accurate
+        player.seek(time: target.time) { [weak self] succeeded in
             Task { @MainActor in
                 guard let self, !self.stopped else { return }
                 self.seeking = false
