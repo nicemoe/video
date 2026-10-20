@@ -91,6 +91,7 @@ struct RootView: View {
                 }
                 .padding(.horizontal, Theme.Metric.margin)
                 .padding(.bottom, 40)
+                .background(CompactRefreshIndicator())
             }
             .background(Theme.background)
             .scrollIndicators(.hidden)

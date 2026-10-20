@@ -95,6 +95,7 @@ struct FolderDetailView: View {
                 .padding(.horizontal, Theme.Metric.margin)
                 .padding(.top, 6)
                 .padding(.bottom, isSelecting ? 100 : 40)
+                .background(CompactRefreshIndicator())
             }
         }
         .background(Theme.background)
