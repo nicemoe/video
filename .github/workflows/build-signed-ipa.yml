@@ -1,4 +1,4 @@
-name: 多媒体 · 构建签名 IPA
+name: 媒体库 · 构建签名 IPA
 
 # 需要 Apple 开发者证书才能跑，所以只支持手动触发。
 # 先在仓库 Settings → Secrets and variables → Actions 里配好这几个 secret：

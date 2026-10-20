@@ -120,7 +120,7 @@ final class FFmpegEngine: NSObject, VideoEngine {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         let codec = player.tracks(mediaType: .video).compactMap { ($0 as? FFmpegAssetTrack)?.codecName }.joined(separator: ",")
-        return "多媒体播放诊断 version=\(version ?? "unknown") build=\(build ?? "unknown")\n"
+        return "媒体库播放诊断 version=\(version ?? "unknown") build=\(build ?? "unknown")\n"
             + "device=\(machine) os=\(UIDevice.current.systemVersion) codec=\(codec) hardwareRequested=\(hardwareDecode)\n"
             + "记录最近一次跳转的前 8 秒；video_submit 表示提交画面，不代表屏幕已完成显示。\n"
             + startupDiagnosticReport + "\n"

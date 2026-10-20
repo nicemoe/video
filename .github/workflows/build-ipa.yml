@@ -1,4 +1,4 @@
-name: 多媒体 · 构建 IPA
+name: 媒体库 · 构建 IPA
 
 # 推 main/master、打 v* 标签、提 PR 或手动触发时，都会跑一次构建。
 # 产出的是「未签名 IPA」——不需要配置任何 Apple 证书就能跑通，

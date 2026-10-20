@@ -9,7 +9,7 @@ enum WebUI {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>多媒体</title>
+<title>媒体库</title>
 <link rel="icon" type="image/png" href="/app-icon-cat-scene-v3.png">
 <link rel="apple-touch-icon" href="/app-icon-cat-scene-v3.png">
 <style>
@@ -188,9 +188,9 @@ header{
 
 <header>
   <div class="wrap hbar">
-    <div class="logo"><img src="/app-icon-cat-scene-v3.png" alt="多媒体" width="32" height="32"></div>
+    <div class="logo"><img src="/app-icon-cat-scene-v3.png" alt="媒体库" width="32" height="32"></div>
     <div>
-      <div class="htitle">多媒体</div>
+      <div class="htitle">媒体库</div>
       <div class="hsub" id="devinfo">连接中…</div>
     </div>
     <div class="spacer"></div>
