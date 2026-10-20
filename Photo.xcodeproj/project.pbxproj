@@ -17,7 +17,11 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		1A0000000000000000000009 /* Photo */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Photo; sourceTree = "<group>"; };
+		1A0000000000000000000009 /* Photo */ = {isa = PBXFileSystemSynchronizedRootGroup;
+            explicitFileTypes = {
+                /* Serve the original PNG bytes to browsers; bypass CopyPNGFile. */
+                WebIcon.png = file;
+            }; explicitFolders = (); path = Photo; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */

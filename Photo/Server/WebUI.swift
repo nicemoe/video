@@ -10,8 +10,8 @@ enum WebUI {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>多媒体</title>
-<link rel="icon" type="image/png" href="/app-icon-cat-scene-v2.png">
-<link rel="apple-touch-icon" href="/app-icon-cat-scene-v2.png">
+<link rel="icon" type="image/png" href="/app-icon-cat-scene-v3.png">
+<link rel="apple-touch-icon" href="/app-icon-cat-scene-v3.png">
 <style>
 :root{
   --bg:#F4F5F7; --surface:#FFFFFF; --fill:#EBEDF1; --line:#E4E7EC;
@@ -41,8 +41,8 @@ header{
 }
 .hbar{display:flex;align-items:center;gap:12px;height:60px}
 /* logo 就是 App 图标本身，不再套蓝底 */
-.logo{width:32px;height:32px;flex:none;line-height:0}
-.logo img{width:32px;height:32px;display:block;border-radius:7px;background:#fff}
+.logo{width:32px;height:32px;flex:none;line-height:0;border-radius:7px;overflow:hidden}
+.logo img{width:32px;height:32px;display:block}
 .htitle{font-weight:700;font-size:16.5px;letter-spacing:-.2px}
 .hsub{font-size:12.5px;color:var(--sub);margin-top:1px}
 .spacer{flex:1}
@@ -188,7 +188,7 @@ header{
 
 <header>
   <div class="wrap hbar">
-    <div class="logo"><img src="/app-icon-cat-scene-v2.png" alt="多媒体" width="32" height="32"></div>
+    <div class="logo"><img src="/app-icon-cat-scene-v3.png" alt="多媒体" width="32" height="32"></div>
     <div>
       <div class="htitle">多媒体</div>
       <div class="hsub" id="devinfo">连接中…</div>
@@ -758,8 +758,21 @@ async function upload(fileList, target){
   for(const batch of batches){
     const batchBytes = batch.reduce((sum, f) => sum + f.size, 0);
     try{
-      const progress = loaded =>
-        showUploadProgress(`上传中 ${saved} / ${media.length}`, (sentBytes + loaded) / totalBytes);
+      let sampleAt = performance.now(), sampleBytes = 0, speed = '';
+      const progress = loaded => {
+        const now = performance.now(), elapsed = now - sampleAt;
+        if(elapsed >= 500){
+          const bytesPerSecond = Math.max(0, loaded - sampleBytes) * 1000 / elapsed;
+          speed = bytesPerSecond >= 1e6
+            ? (bytesPerSecond / 1e6).toFixed(1) + ' MB/s'
+            : (bytesPerSecond / 1e3).toFixed(0) + ' KB/s';
+          sampleAt = now;
+          sampleBytes = loaded;
+        }
+        const status = loaded >= batchBytes ? '正在导入' : '上传中';
+        showUploadProgress(`${status} ${saved} / ${media.length}${speed && loaded < batchBytes ? ' · ' + speed : ''}`,
+          (sentBytes + Math.min(loaded, batchBytes)) / totalBytes);
+      };
       // 视频是一个文件一批，走直传；图片仍然打包成 multipart
       const res = (batch.length === 1 && isVideoFile(batch[0]))
         ? await sendFile(batch[0], target, progress)

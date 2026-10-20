@@ -30,6 +30,15 @@ with tempfile.TemporaryDirectory(prefix='multimedia-tests-') as output:
                     *[str(root / source) for source in server_sources], '-o', str(server_binary)], check=True)
     subprocess.run([str(server_binary)], check=True, timeout=60)
 
+    upload_binary = Path(output) / 'upload-transport-tests'
+    upload_sources = sources[:3] + [
+        'Photo/Server/HTTPServer.swift',
+        'Tools/Checks/UploadTransportTests.swift',
+    ]
+    subprocess.run([compiler, '-swift-version', '5', '-parse-as-library',
+                    *[str(root / source) for source in upload_sources], '-o', str(upload_binary)], check=True)
+    subprocess.run([str(upload_binary)], check=True, timeout=60)
+
     seek_binary = Path(output) / 'seek-queue-tests'
     seek_sources = [
         'Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/CircularBuffer.swift',

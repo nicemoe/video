@@ -72,7 +72,7 @@ final class HTTPServer: @unchecked Sendable {
         let listenerID = ObjectIdentifier(listener)
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
-            let wrapper = HTTPConnection(connection: connection, queue: self.queue, handler: handler) { [weak self] id in
+            let wrapper = HTTPConnection(connection: connection, handler: handler) { [weak self] id in
                 self?.remove(id)
             }
             if self.add(wrapper, generation: generation, listenerID: listenerID) { wrapper.start() }
@@ -224,7 +224,7 @@ private final class HTTPConnection {
     private static let spillThreshold = 4 * 1024 * 1024
 
     private let connection: NWConnection
-    private let queue: DispatchQueue
+    private let queue = DispatchQueue(label: "photovault.http.connection", qos: .userInitiated)
     private let handler: HTTPServer.Handler
     private let onClose: (ObjectIdentifier) -> Void
 
@@ -250,11 +250,9 @@ private final class HTTPConnection {
     private var spilled = 0
 
     init(connection: NWConnection,
-         queue: DispatchQueue,
          handler: @escaping HTTPServer.Handler,
          onClose: @escaping (ObjectIdentifier) -> Void) {
         self.connection = connection
-        self.queue = queue
         self.handler = handler
         self.onClose = onClose
     }
@@ -273,7 +271,16 @@ private final class HTTPConnection {
     }
 
     private func receive() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 17) { [weak self] data, _, isComplete, error in
+        // Coalesce large bodies before writing, but never wait beyond Content-Length.
+        // Headers and idle keep-alive connections must accept short reads immediately.
+        let minimum: Int
+        if let request = pending, request.contentLength > Self.spillThreshold {
+            let remaining = request.contentLength - spilled - buffer.count
+            minimum = max(1, min(64 * 1024, remaining))
+        } else {
+            minimum = 1
+        }
+        connection.receive(minimumIncompleteLength: minimum, maximumLength: 256 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, !self.isClosed else { return }
 
             if let data, !data.isEmpty {
