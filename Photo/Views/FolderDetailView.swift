@@ -99,6 +99,8 @@ struct FolderDetailView: View {
         }
         .background(Theme.background)
         .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.always)
+        .refreshable { await store.syncWithDisk() }
         .readingWidth($screenWidth)
         // 从别的 App 拖图片进来（iPad 分屏、「文件」App 等），一次可以拖多张
         .imageDropTarget(folderID: folderID, cornerRadius: 0) { saved in

@@ -81,6 +81,8 @@ struct GroupDetailView: View {
         }
         .background(Theme.background)
         .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.always)
+        .refreshable { await store.syncWithDisk() }
         .readingWidth($screenWidth)
         .navigationTitle(group?.name ?? "分组")
         .navigationBarTitleDisplayMode(.large)

@@ -88,8 +88,8 @@ final class LibraryStore {
     @ObservationIgnored private lazy var writer = SnapshotWriter(url: Paths.libraryFile)
     private var saveRevision: UInt64 = 0
 
-    /// 正在和磁盘对账。挡住重入，见 syncWithDisk。
-    var isSyncing = false
+    /// 前台同步与手动刷新共享正在进行的任务。
+    @ObservationIgnored var diskSyncTask: Task<(added: Int, removed: Int), Never>?
 
     /// 正在后台补视频封面。挡住重入，见 backfillPosters。
     var isBackfilling = false
@@ -764,6 +764,47 @@ final class LibraryStore {
     func setDirName(_ name: String, forFolder id: UUID) {
         guard let (gi, fi) = locate(folder: id) else { return }
         library.groups[gi].folders[fi].dirName = name
+    }
+
+    /// 扫描前后按 ID 和路径对账，保留扫描期间新建、改名或移动的目录。
+    var diskDirectoryPaths: [UUID: String] {
+        var paths: [UUID: String] = [:]
+        for group in library.groups {
+            paths[group.id] = group.dirName
+            for folder in group.folders {
+                paths[folder.id] = dirPath(ofFolder: folder.id)
+            }
+        }
+        return paths
+    }
+
+    /// 只摘索引记录；空目录是否保留由磁盘决定，不按媒体数量猜测。
+    func removeMissingDirectories(existing: Set<String>, scanned: [UUID: String]) -> Int {
+        let current = diskDirectoryPaths
+        func missing(_ id: UUID) -> Bool {
+            guard let path = current[id], !path.isEmpty, scanned[id] == path,
+                  !existing.contains(path.lowercased()) else { return false }
+            // 扫描期间导入文件可能重新建立了目录。
+            return !FileManager.default.fileExists(atPath: Paths.media.appendingPathComponent(path).path)
+        }
+        var removed = 0
+        for gi in library.groups.indices {
+            let folders = library.groups[gi].folders
+            var doomed = Set(folders.filter { $0.assets.isEmpty && missing($0.id) }.map(\.id))
+            // 并发导入仍在使用的子目录必须连同父链一起保留。
+            let parents = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.parentID) })
+            for folder in folders where !doomed.contains(folder.id) {
+                var parent = folder.parentID
+                while let id = parent, doomed.remove(id) != nil {
+                    parent = parents[id] ?? nil
+                }
+            }
+            library.groups[gi].folders.removeAll { doomed.contains($0.id) }
+            removed += doomed.count
+        }
+        let before = library.groups.count
+        library.groups.removeAll { $0.folders.isEmpty && missing($0.id) }
+        return removed + before - library.groups.count
     }
 
     /// 摘掉文件已经不在磁盘上的记录，返回摘掉几条。

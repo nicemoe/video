@@ -21,11 +21,17 @@ extension LibraryStore {
     /// 返回 (收进来的, 清出去的)。
     @discardableResult
     func syncWithDisk() async -> (added: Int, removed: Int) {
-        // 两个触发点（视图首次出现、从后台切回前台）可能挨着来。不挡一下的话
-        // 两次扫描会看到同一批新文件，各自入库一遍，同一个文件出现两条记录。
-        guard !isSyncing else { return (0, 0) }
-        isSyncing = true
-        defer { isSyncing = false }
+        // 下拉刷新与前台同步共用本轮任务，刷新指示器等到实际同步完成。
+        if let diskSyncTask { return await diskSyncTask.value }
+        let task = Task { await reconcileDisk() }
+        diskSyncTask = task
+        let result = await task.value
+        diskSyncTask = nil
+        return result
+    }
+
+    private func reconcileDisk() async -> (added: Int, removed: Int) {
+        let scannedDirectories = diskDirectoryPaths
 
         let scanned = Dictionary(uniqueKeysWithValues: library.groups.flatMap {
             $0.folders.flatMap { $0.assets.map { ($0.id, $0.fileName) } }
@@ -37,7 +43,7 @@ extension LibraryStore {
         // 扫不动就整个对账都不做。下面第二步是拿「磁盘上没有」当删除依据的，
         // 而扫失败和扫出空目录长得一模一样——混为一谈的话，一次读不到 Media
         // 就等于把整个图库连同封面一起清空。
-        let onDisk: [String: Bool]
+        let onDisk: (files: [String: Bool], directories: Set<String>)
         do {
             onDisk = try await Task.detached(priority: .utility) { try Self.scanMedia() }.value
         } catch {
@@ -48,6 +54,13 @@ extension LibraryStore {
         // 磁盘刚被人动过，之前记住的「这个目录里有哪些名字」不作数了
         forgetClaimedNames()
 
+        // 先摘掉消失的文件，再移除消失的目录记录；不删除磁盘内容。
+        // 必须在导入前完成，避免沿用已被电脑删除的旧目录记录。
+        let removedAssets = removeAssets(notIn: Set(onDisk.files.keys.map { $0.lowercased() }), scanned: scanned)
+        let removedDirectories = removeMissingDirectories(existing: onDisk.directories,
+                                                          scanned: scannedDirectories)
+        let removed = removedAssets + removedDirectories
+
         var known: Set<String> = []
         for group in library.groups {
             for folder in group.folders {
@@ -57,16 +70,10 @@ extension LibraryStore {
 
         // 一、磁盘上有、索引里没有 —— 新丢进来的
         var added = 0
-        for path in onDisk.keys.sorted() where !known.contains(path.lowercased()) {
+        for path in onDisk.files.keys.sorted() where !known.contains(path.lowercased()) {
             guard let folderID = folderID(forDiskPath: path) else { continue }
             if await register(path: path, in: folderID) { added += 1 }
         }
-
-        // 二、索引里有、磁盘上没有 —— 在访达里被删掉了。
-        //
-        // 记录本身不存内容，文件没了这条记录就是个打不开的空壳，留着只会
-        // 在列表里显示成一块灰。所以跟着删。
-        let removed = removeAssets(notIn: Set(onDisk.keys.map { $0.lowercased() }), scanned: scanned)
 
         // 顺手把没人认领的封面清了。摘记录时已经删过对应的那张，这里是兜底：
         // 早先的版本、以及删分组/删目录那几条路都可能漏下几张。
@@ -117,11 +124,17 @@ extension LibraryStore {
     /// Media 下所有能认的媒体文件，key 是相对 Media 的路径。
     ///
     /// 任何目录读取失败都终止本轮扫描，不用不完整快照删除记录。
-    nonisolated private static func scanMedia() throws -> [String: Bool] {
+    nonisolated private static func scanMedia() throws -> (files: [String: Bool], directories: Set<String>) {
         let fm = FileManager.default
+        do {
+            let root = try Paths.media.resourceValues(forKeys: [.isDirectoryKey])
+            guard root.isDirectory == true else { throw CocoaError(.fileReadCorruptFile) }
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return ([:], [])
+        }
         var scanError: Error?
         guard let walker = fm.enumerator(at: Paths.media,
-                                         includingPropertiesForKeys: [.isRegularFileKey],
+                                         includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                                          options: [.skipsHiddenFiles], errorHandler: { _, error in
             scanError = error
             return false
@@ -129,21 +142,27 @@ extension LibraryStore {
 
         let rootParts = Paths.media.standardizedFileURL.pathComponents
         var out: [String: Bool] = [:]
+        var directories: Set<String> = []
 
         for case let url as URL in walker {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            let parts = url.standardizedFileURL.pathComponents
+            guard parts.count > rootParts.count,
+                  Array(parts.prefix(rootParts.count)) == rootParts else { continue }
+            let relative = parts.dropFirst(rootParts.count).joined(separator: "/")
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+            if values.isDirectory == true {
+                directories.insert(relative.lowercased())
+                continue
+            }
             guard values.isRegularFile == true else { continue }
             let name = url.lastPathComponent
             let isVideo = MediaFormats.isVideo(fileName: name)
             guard isVideo || MediaFormats.isImage(fileName: name) else { continue }
 
-            let parts = url.standardizedFileURL.pathComponents
-            guard parts.count > rootParts.count,
-                  Array(parts.prefix(rootParts.count)) == rootParts else { continue }
-            out[parts.dropFirst(rootParts.count).joined(separator: "/")] = isVideo
+            out[relative] = isVideo
         }
         if let scanError { throw scanError }
-        return out
+        return (out, directories)
     }
 
     // MARK: 收进来

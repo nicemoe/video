@@ -94,6 +94,8 @@ struct RootView: View {
             }
             .background(Theme.background)
             .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.always)
+            .refreshable { await store.syncWithDisk() }
             .readingWidth($screenWidth)
             // 叫「媒体」不叫「相册」：这里以后还要放视频
             .navigationTitle("媒体")
@@ -232,6 +234,15 @@ struct RootView: View {
             if phase == .active { Task { await syncDisk() } }
         }
         .task { await syncDisk() }
+        .onChange(of: store.groups.map(\.id) + store.groups.flatMap { $0.folders.map(\.id) }) { _, _ in
+            // 当前目录被电脑删除时，退回仍存在的上一级。
+            path = Array(path.prefix { route in
+                switch route {
+                case .group(let id): return store.group(id) != nil
+                case .folder(let id): return store.folder(id) != nil
+                }
+            })
+        }
         .alert("操作失败", isPresented: Binding(
             get: { store.operationError != nil },
             set: { if !$0 { store.operationError = nil } }

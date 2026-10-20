@@ -68,3 +68,6 @@ check_eof()
 
 from run_replay_button_tests import main as check_replay_button
 check_replay_button()
+
+from run_disk_sync_tests import main as check_disk_sync
+check_disk_sync()
