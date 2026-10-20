@@ -43,7 +43,7 @@ extension LibraryStore {
         // 扫不动就整个对账都不做。下面第二步是拿「磁盘上没有」当删除依据的，
         // 而扫失败和扫出空目录长得一模一样——混为一谈的话，一次读不到 Media
         // 就等于把整个图库连同封面一起清空。
-        let onDisk: (files: [String: Bool], directories: Set<String>)
+        let onDisk: (files: [String: DiskFileState], directories: Set<String>)
         do {
             onDisk = try await Task.detached(priority: .utility) { try Self.scanMedia() }.value
         } catch {
@@ -70,9 +70,19 @@ extension LibraryStore {
 
         // 一、磁盘上有、索引里没有 —— 新丢进来的
         var added = 0
-        for path in onDisk.files.keys.sorted() where !known.contains(path.lowercased()) {
+        let candidates = onDisk.files.keys.sorted().filter { !known.contains($0.lowercased()) }
+        if !candidates.isEmpty {
+            // 整批只等一次，观察复制期间的大小/修改时间变化，不按文件逐个等待。
+            do { try await Task.sleep(for: .milliseconds(750)) }
+            catch {
+                if removed > 0 { saveNow() }
+                return (0, removed)
+            }
+        }
+        for path in candidates {
+            guard let expected = onDisk.files[path], expected.bytes > 0 else { continue }
             guard let folderID = folderID(forDiskPath: path) else { continue }
-            if await register(path: path, in: folderID) { added += 1 }
+            if await register(path: path, in: folderID, expected: expected) { added += 1 }
         }
 
         // 顺手把没人认领的封面清了。摘记录时已经删过对应的那张，这里是兜底：
@@ -124,11 +134,11 @@ extension LibraryStore {
     /// Media 下所有能认的媒体文件，key 是相对 Media 的路径。
     ///
     /// 任何目录读取失败都终止本轮扫描，不用不完整快照删除记录。
-    nonisolated private static func scanMedia() throws -> (files: [String: Bool], directories: Set<String>) {
+    nonisolated private static func scanMedia() throws -> (files: [String: DiskFileState], directories: Set<String>) {
         let fm = FileManager.default
         do {
-            let root = try Paths.media.resourceValues(forKeys: [.isDirectoryKey])
-            guard root.isDirectory == true else { throw CocoaError(.fileReadCorruptFile) }
+            let root = try fm.attributesOfItem(atPath: Paths.media.path)
+            guard root[.type] as? FileAttributeType == .typeDirectory else { throw CocoaError(.fileReadCorruptFile) }
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             return ([:], [])
         }
@@ -141,7 +151,7 @@ extension LibraryStore {
         }) else { throw CocoaError(.fileReadUnknown) }
 
         let rootParts = Paths.media.standardizedFileURL.pathComponents
-        var out: [String: Bool] = [:]
+        var out: [String: DiskFileState] = [:]
         var directories: Set<String> = []
 
         for case let url as URL in walker {
@@ -159,7 +169,7 @@ extension LibraryStore {
             let isVideo = MediaFormats.isVideo(fileName: name)
             guard isVideo || MediaFormats.isImage(fileName: name) else { continue }
 
-            out[relative] = isVideo
+            if let state = try DiskFileState.read(at: url) { out[relative] = state }
         }
         if let scanError { throw scanError }
         return (out, directories)
@@ -212,47 +222,40 @@ extension LibraryStore {
     }
 
     /// 探一下这个文件，挂进索引。文件本身不动——它已经在该在的位置了。
-    private func register(path: String, in folderID: UUID) async -> Bool {
+    private func register(path: String, in folderID: UUID, expected: DiskFileState) async -> Bool {
         let url = Paths.media.appendingPathComponent(path)
         let name = (path as NSString).lastPathComponent
-
-        if MediaFormats.isVideo(fileName: name) {
-            // 完整媒体用 FFmpeg 探测，失败保留原文件并报告，不生成空元信息记录。
-            let info: VideoProbe.Info
-            do { info = try await VideoProbe.inspect(url) }
-            catch {
-                operationError = "无法导入「\(name)」：\(error.localizedDescription)"
+        do {
+            guard expected.bytes > 0, try expected.matchesFile(at: url) else { return false }
+            let asset: Asset
+            if MediaFormats.isVideo(fileName: name) {
+                let info = try await VideoProbe.inspect(url)
+                asset = Asset(fileName: path, originalName: Self.displayName(from: name), kind: .video,
+                              width: info.width, height: info.height, byteCount: expected.bytes,
+                              duration: info.duration)
+            } else {
+                let probe = try await Task.detached(priority: .utility) { () -> ImageProbe.Info? in
+                    let data = try Data(contentsOf: url)
+                    return ImageProbe.inspect(data)
+                }.value
+                guard let info = probe else { return false }
+                asset = Asset(fileName: path, originalName: Self.displayName(from: name),
+                              width: info.width, height: info.height, byteCount: expected.bytes)
+            }
+            guard try expected.matchesFile(at: url) else { return false }
+            return attach(asset, to: folderID)
+        } catch {
+            let probeError = error
+            do {
+                // 探测期间继续复制或被移走，下次刷新再处理，不当成坏视频。
+                guard try expected.matchesFile(at: url) else { return false }
+            } catch {
+                operationError = "无法读取「\(name)」：\(error.localizedDescription)"
                 return false
             }
-            guard FileManager.default.fileExists(atPath: url.path) else { return false }
-
-            // 分两步写。挤成一行的话 try? 和 as? 会叠出两层可选，
-            // 外面那层 ?? 只剥掉一层，剩下的又要在用的地方再兜一次底。
-            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-            let bytes = (attrs?[.size] as? Int) ?? 0
-            let asset = Asset(fileName: path,
-                              originalName: Self.displayName(from: name),
-                              kind: .video,
-                              width: info.width,
-                              height: info.height,
-                              byteCount: bytes,
-                              duration: info.duration)
-            return attach(asset, to: folderID)
+            operationError = "无法导入「\(name)」：\(probeError.localizedDescription)"
+            return false
         }
-
-        let probe = await Task.detached(priority: .utility) { () -> (ImageProbe.Info, Int)? in
-            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-                  let info = ImageProbe.inspect(data) else { return nil }
-            return (info, data.count)
-        }.value
-        guard let (info, bytes) = probe else { return false }
-
-        let asset = Asset(fileName: path,
-                          originalName: Self.displayName(from: name),
-                          width: info.width,
-                          height: info.height,
-                          byteCount: bytes)
-        return attach(asset, to: folderID)
     }
 
 }

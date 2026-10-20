@@ -19,22 +19,41 @@ enum MediaFormats {
     func invalidate(_ id: UUID) { invalidated.insert(id) }
 }
 struct Library: Codable { var groups: [PhotoGroup] = [] }
+@MainActor enum VideoProbe {
+    struct Info { let width: Int; let height: Int; let duration: Double }
+    enum Mode { case valid, growingFailure, growingSuccess, invalid }
+    static var mode = Mode.valid
+    static var inspections = 0
+    static func inspect(_ url: URL) async throws -> Info {
+        inspections += 1
+        await Task.yield()
+        if mode == .growingFailure || mode == .growingSuccess {
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data([4, 5, 6]))
+            try handle.close()
+        }
+        if mode == .invalid || mode == .growingFailure { throw CocoaError(.fileReadCorruptFile) }
+        return Info(width: 1280, height: 720, duration: 20)
+    }
+}
+enum ImageProbe {
+    struct Info { let width: Int; let height: Int }
+    static func inspect(_ data: Data) -> Info? { Info(width: 1, height: 1) }
+}
 @MainActor final class LibraryStore {
     var library = Library()
     var groups: [PhotoGroup] { library.groups }
     var diskSyncTask: Task<(added: Int, removed: Int), Never>?
     var operationError: String?
     var saved: Data?
-    var registrations = 0
     func saveNow() { saved = try! JSONEncoder().encode(library) }
     func forgetClaimedNames() {}
-    // Codec/import I/O is outside these tests; reconciliation and filesystem scanning are production code.
+    // Codec I/O is controlled; scanning, registration and reconciliation are production code.
     func folderID(forDiskPath path: String) -> UUID? { library.groups.first?.folders.first?.id }
-    func register(path: String, in id: UUID) async -> Bool {
-        registrations += 1
-        await Task.yield()
+    func attach(_ asset: Asset, to id: UUID) -> Bool {
         guard let (gi, fi) = locate(folder: id) else { return false }
-        library.groups[gi].folders[fi].assets.append(Asset(fileName: path))
+        library.groups[gi].folders[fi].assets.append(asset)
         return true
     }
     /* PRODUCTION_METHODS */
@@ -104,12 +123,44 @@ func mkdir(_ path: String) throws {
         store.library.groups[0].folders = [empty]
 
         // Both callers wait for the same scan/import, including its result.
-        try Data([2]).write(to: Paths.media.appendingPathComponent("保留/空目录/new.jpg"))
+        try Data([2]).write(to: Paths.media.appendingPathComponent("保留/空目录/new.mp4"))
         async let first = store.syncWithDisk()
         async let second = store.syncWithDisk()
         let (a, b) = await (first, second)
-        try expect(a.added == 1 && b.added == 1 && store.registrations == 1, "Concurrent refresh duplicated import or returned early")
+        try expect(a.added == 1 && b.added == 1 && VideoProbe.inspections == 1, "Concurrent refresh duplicated import or returned early")
         print("PASS: simultaneous foreground and pull refresh share one completed import")
+
+        let growing = Paths.media.appendingPathComponent("保留/空目录/growing.mp4")
+        try Data([1]).write(to: growing)
+        let writer = Task {
+            try await Task.sleep(for: .milliseconds(100))
+            try Data([1, 2, 3]).write(to: growing)
+        }
+        let copying = await store.syncWithDisk()
+        try await writer.value
+        try expect(copying.added == 0 && VideoProbe.inspections == 1 && store.operationError == nil,
+                   "File growing during scan was probed")
+        VideoProbe.mode = .growingFailure
+        let interrupted = await store.syncWithDisk()
+        try expect(interrupted.added == 0 && store.operationError == nil, "Active copy reported as corrupt video")
+        VideoProbe.mode = .growingSuccess
+        let changed = await store.syncWithDisk()
+        try expect(changed.added == 0, "Metadata from a changing file was committed")
+        VideoProbe.mode = .valid
+        let complete = await store.syncWithDisk()
+        try expect(complete.added == 1, "Completed copy was not imported on next refresh")
+        try expect(store.groups[0].folders[0].assets.last?.byteCount == 9, "Imported size is stale")
+        let emptyFile = Paths.media.appendingPathComponent("保留/空目录/zero.mp4")
+        try Data().write(to: emptyFile)
+        let inspections = VideoProbe.inspections
+        _ = await store.syncWithDisk()
+        try expect(VideoProbe.inspections == inspections && store.operationError == nil, "Zero-byte copy placeholder was probed")
+        try Data([1]).write(to: emptyFile)
+        VideoProbe.mode = .invalid
+        _ = await store.syncWithDisk()
+        try expect(store.operationError != nil, "Stable corrupt video error was hidden")
+        store.operationError = nil
+        print("PASS: growing/empty files deferred; mid-probe changes rejected; completed copies imported; real errors retained")
 
         // Invalid/unreadable root is an error, not an empty successful snapshot.
         try fm.moveItem(at: Paths.media, to: Paths.root.appendingPathComponent("SavedMedia"))
@@ -122,7 +173,7 @@ func mkdir(_ path: String) throws {
         store.operationError = nil
         let deletedRoot = await store.syncWithDisk()
         try expect(deletedRoot.removed > 0 && store.groups.isEmpty && store.operationError == nil,
-                   "Deleted Media root left stale records")
+                   "Deleted Media root left stale records: removed=\(deletedRoot.removed), groups=\(store.groups.count), error=\(String(describing: store.operationError))")
         print("PASS: scan failure preserves index; explicitly missing Media root clears stale records")
     }
 }

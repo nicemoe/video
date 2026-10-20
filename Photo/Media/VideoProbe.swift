@@ -12,25 +12,33 @@ enum VideoProbe {
     }
 
     enum ProbeError: LocalizedError {
-        case noVideo, noFrame, ffmpeg(Int32)
+        case emptyFile, noVideo, noFrame, ffmpeg(Int32, stage: String)
         var errorDescription: String? {
             switch self {
+            case .emptyFile: return "文件大小为 0 字节，尚无可读取的视频内容"
             case .noVideo: return "文件中没有可读取的视频轨道"
             case .noFrame: return "无法生成视频封面"
-            case .ffmpeg(let code): return "视频探测失败（\(code)）"
+            case .ffmpeg(let code, let stage):
+                var buffer = [CChar](repeating: 0, count: Int(AV_ERROR_MAX_STRING_SIZE))
+                buffer.withUnsafeMutableBufferPointer { pointer in
+                    _ = av_strerror(code, pointer.baseAddress, pointer.count)
+                }
+                return "\(stage)失败：\(String(cString: buffer))（\(code)）"
             }
         }
     }
 
     /// 元信息统一由 FFmpeg 读取；上传临时文件没有扩展名也按内容识别。
     static func inspect(_ url: URL) async throws -> Info {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        if values.fileSize == 0 { throw ProbeError.emptyFile }
         var context: UnsafeMutablePointer<AVFormatContext>?
         defer { avformat_close_input(&context) }
         let opened = avformat_open_input(&context, url.path, nil, nil)
-        guard opened >= 0 else { throw ProbeError.ffmpeg(opened) }
+        guard opened >= 0 else { throw ProbeError.ffmpeg(opened, stage: "打开视频文件") }
         guard let context else { throw ProbeError.noVideo }
         let found = avformat_find_stream_info(context, nil)
-        guard found >= 0 else { throw ProbeError.ffmpeg(found) }
+        guard found >= 0 else { throw ProbeError.ffmpeg(found, stage: "读取视频信息") }
         let index = av_find_best_stream(context, AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0)
         guard index >= 0, let stream = context.pointee.streams[Int(index)],
               let parameters = stream.pointee.codecpar else { throw ProbeError.noVideo }

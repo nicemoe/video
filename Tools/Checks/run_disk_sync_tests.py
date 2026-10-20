@@ -17,18 +17,21 @@ def main():
         '    func removeAssets(', '    var livePosterNames:', '    func dirPath(ofFolder',
         '    private func locate(folder', '    private func group(containing',
         '    func path(to folderID:',
+        '    nonisolated static func displayName(',
     ]]
     methods += [block(sync, signature) for signature in [
         '    func syncWithDisk()', '    private func reconcileDisk()',
         '    nonisolated private static func scanMedia()',
         '    nonisolated private static func sweepPosters(',
+        '    private func register(',
     ]]
     source = source.replace('/* PRODUCTION_MODELS */', models[models.index('enum AssetKind:'):models.index('// MARK: - 排序')])
     source = source.replace('/* PRODUCTION_METHODS */', '\n'.join(methods))
     with tempfile.TemporaryDirectory(prefix='disk-sync-') as folder:
         path = Path(folder) / 'DiskSync.swift'
         binary = Path(folder) / 'disk-sync'
-        command = [shutil.which('swiftc'), '-swift-version', '5', '-parse-as-library', str(path), '-o', str(binary)]
+        command = [shutil.which('swiftc'), '-swift-version', '5', '-parse-as-library', str(path),
+                   str(ROOT / 'Photo/Models/DiskFileState.swift'), '-o', str(binary)]
         path.write_text(source)
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True, timeout=30)
